@@ -1,0 +1,310 @@
+"""补拉与合并：夜间用 NapCat 历史接口补齐账本。
+
+- 群聊 get_group_msg_history / 私聊 get_friend_msg_history，分页锚点为
+  message_seq（实为短 message_id），结果包含锚点本身，需去重。
+- 会话没有消息时 NapCat 抛「消息不存在」，按「没有消息」处理。
+- 补拉失败只记录到运行统计，不让整个流程失败。
+- 窗口内的消息全部补拉，不设条数上限（2026-10-07 修订）。
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Any
+
+from . import constants as C
+from .platform import PlatformHelper, friend_umo, group_umo
+from .storage import Storage
+
+_NO_MESSAGE_PATTERN = re.compile(r"消息不存在|message not found|not found", re.IGNORECASE)
+
+#: OneBot 消息段类型 → 占位符
+_SEGMENT_PLACEHOLDER = {
+    "image": "[图片]",
+    "record": "[语音]",
+    "video": "[视频]",
+    "face": "[表情]",
+    "reply": "[引用]",
+    "forward": "[合并转发]",
+    "file": "[文件]",
+    "json": "[卡片消息]",
+    "xml": "[卡片消息]",
+    "poke": "[戳一戳]",
+}
+
+
+def _normalize_text(text: str) -> str:
+    """bot 消息匹配合并用的文本归一化：去掉首尾与内部多余空白。"""
+    return re.sub(r"\s+", "", text or "")
+
+
+def segments_to_text(message: Any) -> str:
+    """OneBot 消息（段列表或字符串）转纯文本。"""
+    if isinstance(message, str):
+        return message.strip()
+    parts: list[str] = []
+    for seg in message or []:
+        if not isinstance(seg, dict):
+            continue
+        seg_type = seg.get("type", "")
+        data = seg.get("data", {}) or {}
+        if seg_type == "text":
+            parts.append(str(data.get("text", "")))
+        elif seg_type == "at":
+            parts.append(f"[@{data.get('qq', '')}]")
+        else:
+            parts.append(_SEGMENT_PLACEHOLDER.get(seg_type, f"[{seg_type}]"))
+    return "".join(parts).strip()
+
+
+class Backfiller:
+    """夜间补拉器。"""
+
+    def __init__(self, storage: Storage, platform: PlatformHelper, logger: Any):
+        self.storage = storage
+        self.platform = platform
+        self.logger = logger
+        self._merged_bot_count = 0
+
+    async def candidate_sessions(
+        self, window_start: float
+    ) -> tuple[list[str], list[str]]:
+        """返回 (群号列表, 私聊 QQ 列表)。
+
+        候选 = 窗口内账本有消息的会话 ∪ 窗口内触发过的 AstrHe 闹钟目标
+        ∪（冷启动时）bot 所在的全部群和近期私聊。
+        """
+        groups: set[str] = set()
+        friends: set[str] = set()
+        platform_id = self.platform.default_platform_id()
+
+        for umo in await self.storage.ledger.list_session_umos(window_start):
+            pid, mtype, sid = umo.split(":", 2) if umo.count(":") >= 2 else ("", "", "")
+            if mtype == "GroupMessage":
+                groups.add(sid)
+            elif mtype == "FriendMessage":
+                friends.add(sid)
+
+        for alarm in await self.storage.alarms.active_alarms():
+            _, mtype, sid = alarm["target_umo"].split(":", 2) if alarm["target_umo"].count(":") >= 2 else ("", "", "")
+            if mtype == "GroupMessage":
+                groups.add(sid)
+            elif mtype == "FriendMessage":
+                friends.add(sid)
+
+        # 冷启动：账本为空时回溯全部群与近期私聊
+        max_ts = await self.storage.ledger.max_message_ts()
+        if max_ts is None:
+            try:
+                group_list = await self.platform.call_action("get_group_list")
+                for g in group_list or []:
+                    gid = str(g.get("group_id", ""))
+                    if gid:
+                        groups.add(gid)
+            except Exception as exc:  # noqa: BLE001
+                self.logger.debug(f"[AstrHe] 冷启动取群列表失败: {exc}")
+            try:
+                contacts = await self.platform.call_action("get_recent_contact", count=100)
+                for c in contacts or []:
+                    # chatType==1 为好友私聊（NapCat 扩展字段）
+                    if c.get("chatType") == 1:
+                        uid = str(c.get("user_id", "") or c.get("peerUin", ""))
+                        if uid:
+                            friends.add(uid)
+            except Exception as exc:  # noqa: BLE001
+                self.logger.debug(f"[AstrHe] 冷启动取近期会话失败: {exc}")
+
+        _ = platform_id  # 保留：平台 id 由 group_umo/friend_umo 在调用处组合
+        return sorted(groups), sorted(friends)
+
+    async def backfill_all(
+        self, window_start: float, window_end: float
+    ) -> dict[str, Any]:
+        """对全部候选会话补拉窗口内消息，返回统计信息。"""
+        stats: dict[str, Any] = {"groups": 0, "friends": 0, "failed": [], "merged_bot": 0}
+        self._merged_bot_count = 0
+        groups, friends = await self.candidate_sessions(window_start)
+        platform_id = self.platform.default_platform_id()
+        self_id = await self._get_self_id()
+
+        for gid in groups:
+            try:
+                n = await self._backfill_session(
+                    group_umo(platform_id, gid),
+                    action="get_group_msg_history",
+                    key="group_id",
+                    target=gid,
+                    window_start=window_start,
+                    window_end=window_end,
+                    self_id=self_id,
+                )
+                stats["groups"] += n
+            except Exception as exc:  # noqa: BLE001 - 单会话失败不拖垮整晚
+                stats["failed"].append(f"group:{gid}: {exc}")
+                self.logger.debug(f"[AstrHe] 补拉群 {gid} 失败: {exc}")
+        for uid in friends:
+            try:
+                n = await self._backfill_session(
+                    friend_umo(platform_id, uid),
+                    action="get_friend_msg_history",
+                    key="user_id",
+                    target=uid,
+                    window_start=window_start,
+                    window_end=window_end,
+                    self_id=self_id,
+                )
+                stats["friends"] += n
+            except Exception as exc:  # noqa: BLE001
+                stats["failed"].append(f"friend:{uid}: {exc}")
+                self.logger.debug(f"[AstrHe] 补拉私聊 {uid} 失败: {exc}")
+        stats["merged_bot"] = self._merged_bot_count
+        return stats
+
+    async def _get_self_id(self) -> str:
+        try:
+            info = await self.platform.call_action("get_login_info")
+            return str(info.get("user_id", "") or "")
+        except Exception:  # noqa: BLE001
+            return ""
+
+    async def _backfill_session(
+        self,
+        *,
+        umo: str,
+        action: str,
+        key: str,
+        target: str,
+        window_start: float,
+        window_end: float,
+        self_id: str,
+    ) -> int:
+        """分页补拉一个会话窗口内的全部消息，返回写入/合并条数。"""
+        _, message_type, session_id = umo.split(":", 2)
+        anchor = ""  # 空锚点从最新开始
+        seen_ids: set[str] = set()
+        written = 0
+        while True:
+            params: dict[str, Any] = {key: int(target), "count": C.BACKFILL_PAGE_SIZE}
+            if anchor:
+                params["message_seq"] = int(anchor)
+            try:
+                result = await self.platform.call_action(action, **params)
+            except RuntimeError as exc:
+                if _NO_MESSAGE_PATTERN.search(str(exc)):
+                    break  # 会话没有消息，按空处理
+                raise
+            messages = (result or {}).get("messages") or []
+            if not messages:
+                break
+            oldest_ts = None
+            new_anchor = None
+            for raw in messages:
+                mid = str(raw.get("message_id", "") or "")
+                ts = float(raw.get("time", 0) or 0)
+                if oldest_ts is None or ts < oldest_ts:
+                    oldest_ts = ts
+                if mid:
+                    if new_anchor is None or int(mid) < int(new_anchor):
+                        new_anchor = mid
+                if mid in seen_ids:
+                    continue  # 分页结果包含锚点本身，去重
+                if mid:
+                    seen_ids.add(mid)
+                if not (window_start <= ts <= window_end):
+                    continue
+                merged = await self._merge_message(
+                    umo=umo,
+                    message_type=message_type,
+                    session_id=session_id,
+                    raw=raw,
+                    self_id=self_id,
+                )
+                if merged:
+                    written += 1
+            # 整页最旧消息已早于窗口起点，停止翻页
+            if oldest_ts is not None and oldest_ts < window_start:
+                break
+            if new_anchor is None or new_anchor == anchor:
+                break  # 没有更旧的消息了
+            anchor = new_anchor
+        return written
+
+    async def _merge_message(
+        self,
+        *,
+        umo: str,
+        message_type: str,
+        session_id: str,
+        raw: dict,
+        self_id: str,
+    ) -> bool:
+        """合并一条补拉消息进账本，返回是否有实质写入/合并。
+
+        规则：
+        - 非 bot 消息按 (umo, platform_message_id) 去重（INSERT OR IGNORE，
+          已撤回的消息不会被覆盖回未撤回）。
+        - bot 消息先与「无平台 id 的临时记录」按文本 + 120 秒匹配，匹配上
+          只补平台 id；匹配不到才作为新记录写入。
+        """
+        mid = str(raw.get("message_id", "") or "")
+        ts = float(raw.get("time", 0) or 0)
+        sender = raw.get("sender", {}) or {}
+        sender_id = str(
+            raw.get("user_id", "") or sender.get("user_id", "") or ""
+        )
+        post_type = str(raw.get("post_type", "message"))
+        is_bot = post_type == "message_sent" or (self_id and sender_id == self_id)
+        text = segments_to_text(raw.get("message"))
+        platform_id = umo.split(":", 1)[0]
+
+        if not is_bot:
+            row_id = await self.storage.ledger.add_message(
+                umo=umo,
+                platform_id=platform_id,
+                message_type=message_type,
+                session_id=session_id,
+                sender_id=sender_id,
+                sender_name=str(sender.get("nickname", "") or ""),
+                sender_card=str(sender.get("card", "") or ""),
+                text=text,
+                ts=ts,
+                platform_message_id=mid or None,
+                is_bot=False,
+                source="backfill",
+            )
+            return row_id is not None
+
+        # bot 消息：尝试与临时记录合并
+        norm = _normalize_text(text)
+        candidates = await self.storage.ledger.find_bot_temp_messages(
+            umo, ts - C.BOT_MESSAGE_MERGE_TOLERANCE
+        )
+        for cand in candidates:
+            if abs(cand["ts"] - ts) <= C.BOT_MESSAGE_MERGE_TOLERANCE and (
+                _normalize_text(cand["text"]) == norm
+            ):
+                await self.storage.ledger.attach_platform_id(cand["id"], mid)
+                self._merged_bot_count += 1
+                return True
+        if mid:
+            row_id = await self.storage.ledger.add_message(
+                umo=umo,
+                platform_id=platform_id,
+                message_type=message_type,
+                session_id=session_id,
+                sender_id=self_id,
+                sender_name="",
+                sender_card="",
+                text=text,
+                ts=ts,
+                platform_message_id=mid,
+                is_bot=True,
+                source="backfill",
+            )
+            return row_id is not None
+        return False
+
+    async def cleanup_old(self, now_ts: float) -> tuple[int, int]:
+        """清理超过保留期的 messages / notices。"""
+        cutoff = now_ts - C.LEDGER_RETENTION_SECONDS
+        return await self.storage.ledger.cleanup(cutoff)

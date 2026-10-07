@@ -1,0 +1,15 @@
+{
+  "enabled": {
+    "type": "bool",
+    "description": "启用 AstrHe",
+    "hint": "总开关。开启后插件会在本地记录聊天账本（保留 30 天），每天零点用所选模型复盘并规划。夜间流程不发送任何消息，但会消耗不少 token。默认关闭。",
+    "default": false
+  },
+  "provider_id": {
+    "type": "string",
+    "description": "夜间复盘使用的模型",
+    "hint": "夜间汇报、规划、审稿共用这一个模型。留空时使用 AstrBot 当前默认的聊天模型。",
+    "default": "",
+    "_special": "select_provider"
+  }
+}

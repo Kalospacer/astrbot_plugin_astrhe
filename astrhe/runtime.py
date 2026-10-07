@@ -1,0 +1,303 @@
+"""AstrHe 运行时：装配配置、数据库、调度器、工具注册与生命周期。"""
+
+from __future__ import annotations
+
+import time
+from typing import Any
+
+from . import constants as C
+from .alarm_tracker import AlarmTracker
+from .backfill import Backfiller
+from .injector import Injector
+from .night.pipeline import NightPipeline
+from .platform import PlatformHelper
+from .qq.client import QQClient
+from .qq.friend_requests import FriendRequestManager
+from .qq.rate_limit import RateLimiter
+from .recorder import Recorder
+from .scheduler import NightScheduler
+from .storage import Storage
+from .timeutil import get_config_timezone, local_datetime_str, utc_now
+from .tools.base import AstrHeFunctionTool
+from .tools.day_tools import DayTools
+from .tools.draft_tools import DraftTools
+from .tools.reader_tools import ReaderTools
+from .tools.schedule_tool import ScheduleToolImpl
+from .tools.secrecy import PresentResolver
+from .webapi import WebApi
+
+try:
+    from astrbot.core.star.star_tools import StarTools
+except Exception:  # pragma: no cover
+    StarTools = None  # type: ignore[assignment]
+
+PLUGIN_DIR_NAME = "astrbot_plugin_astrhe"
+
+
+class AstrHeRuntime:
+    def __init__(self, context: Any, config: Any, logger: Any):
+        self.context = context
+        self.config = config if config is not None else {}
+        self.logger = logger
+
+        data_dir = (
+            StarTools.get_data_dir(PLUGIN_DIR_NAME)
+            if StarTools is not None
+            else __import__("pathlib").Path("data")
+        )
+        self.storage = Storage(data_dir)
+        self.platform = PlatformHelper(context, logger)
+        self.qq = QQClient(self.platform)
+        self.rate_limiter = RateLimiter(self.storage, self.tz)
+        self.secrecy = PresentResolver(self.storage, self.qq)
+        self.recorder = Recorder(self.storage, logger, self.enabled)
+        self.backfiller = Backfiller(self.storage, self.platform, logger)
+        self.friend_requests = FriendRequestManager(self.storage, self.qq, logger)
+        self.day_tools = DayTools(self.storage, self.tz)
+        self.schedule_impl = ScheduleToolImpl(
+            self.storage, context, self.qq, self.rate_limiter,
+            self.tz, self.secrecy, self.admins,
+        )
+        self.reader_tools = ReaderTools(
+            self.storage, context, self.tz, self._default_window, self.secrecy
+        )
+        self.injector = Injector(self.storage, self.tz, self.secrecy, self.enabled, logger)
+        self.alarm_tracker = AlarmTracker(self.storage, context, self.tz, logger)
+        self.scheduler = NightScheduler(self.storage, self.tz, self.run_night, logger)
+        self.webapi = WebApi(self.storage, context, self.tz, self.status_dict)
+
+        self._tools_registered = False
+        self._current_pipeline: NightPipeline | None = None
+
+    # ---------------- 配置 ----------------
+
+    def enabled(self) -> bool:
+        try:
+            return bool(self.config.get("enabled", False))
+        except Exception:  # noqa: BLE001
+            return False
+
+    def tz(self):
+        try:
+            cfg = self.context.get_config()
+        except Exception:  # noqa: BLE001
+            cfg = None
+        return get_config_timezone(cfg)
+
+    def admins(self) -> list[str]:
+        try:
+            ids = self.context.get_config().get("admins_id", []) or []
+        except Exception:  # noqa: BLE001
+            ids = []
+        return [str(x) for x in ids if str(x).isdigit()]
+
+    @staticmethod
+    def _default_window() -> tuple[float, float]:
+        now = utc_now()
+        return now - C.COLD_START_SECONDS, now
+
+    # ---------------- 生命周期 ----------------
+
+    async def initialize(self) -> None:
+        await self.storage.open()
+        if not self.enabled():
+            self.logger.info("[AstrHe] 插件未启用（enabled=false），只初始化存储")
+            return
+        self._register_tools()
+        self.webapi.register()
+        self.scheduler.start()
+        self.logger.info("[AstrHe] 已启用：零点调度、记录器、白天注入与工具已就绪")
+
+    async def terminate(self) -> None:
+        await self.scheduler.stop()
+        # 进行中的运行由 scheduler.stop() 取消，pipeline 内部按
+        # 「提交前判失败、提交后外部动作照常收尾」的规则收尾
+        await self.storage.close()
+
+    # ---------------- 工具注册 ----------------
+
+    def _register_tools(self) -> None:
+        if self._tools_registered:
+            return
+        add_llm_tools = getattr(self.context, "add_llm_tools", None)
+        if not callable(add_llm_tools):
+            self.logger.warning("[AstrHe] 找不到工具注册入口，跳过注册")
+            return
+        from .qq.action_tool import QQActionTool
+        from .qq.lookup_tool import QQLookupTool
+
+        todo_meta = DayTools.todo_update_tool()
+        schedule_params = {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "description": "create / list / edit / cancel"},
+                "target_type": {"type": "string", "description": "current / group / private"},
+                "target_id": {"type": "string", "description": "群号或 QQ 号"},
+                "run_at": {"type": "string", "description": "执行时间，如 2026-10-11 00:00"},
+                "cron_expression": {"type": "string", "description": "重复规则（cron 表达式）"},
+                "background": {"type": "string", "description": "背景（必填）"},
+                "purpose": {"type": "string", "description": "目的（必填）"},
+                "how": {"type": "string", "description": "怎么做（必填）"},
+                "involved": {"type": "array", "items": {"type": "string"}, "description": "牵涉的人"},
+                "mentions": {"type": "array", "items": {"type": "string"}, "description": "要 @ 的 QQ 号"},
+                "secret_from": {"type": "array", "items": {"type": "string"}, "description": "对谁保密"},
+                "taboo": {"type": "string", "description": "禁忌"},
+                "agreed": {"type": "boolean", "description": "是否事先约定好的时刻"},
+                "agreed_reason": {"type": "string", "description": "约定理由"},
+                "alarm_id": {"type": "integer", "description": "edit / cancel 时的闹钟编号"},
+                "job_id": {"type": "string", "description": "cancel 外部任务时的 job_id"},
+            },
+            "required": ["action"],
+        }
+        try:
+            add_llm_tools(
+                AstrHeFunctionTool(
+                    name=todo_meta["name"],
+                    description=todo_meta["description"],
+                    parameters=todo_meta["parameters"],
+                    fn=self.day_tools.todo_update,
+                ),
+                AstrHeFunctionTool(
+                    name="astrhe_read_plan",
+                    description=(
+                        "读规划书全文。参数：date（可选，YYYY-MM-DD，默认最近一份）。"
+                        "对别人保密的内容会被遮挡。"
+                    ),
+                    parameters={
+                        "type": "object",
+                        "properties": {"date": {"type": "string"}},
+                    },
+                    fn=self.reader_tools._read_plan,
+                ),
+                AstrHeFunctionTool(
+                    name="astrhe_schedule",
+                    description=(
+                        "定时任务工具（替代 future_task，可指定目标会话）。"
+                        "action=create 时必须写清 background / purpose / how，"
+                        "被叫醒时只看卡片就要能办成事。"
+                    ),
+                    parameters=schedule_params,
+                    fn=self.schedule_impl.run,
+                ),
+                QQLookupTool(qq_client=self.qq),
+                QQActionTool(qq_client=self.qq, rate_limiter=self.rate_limiter),
+            )
+            self._tools_registered = True
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning(f"[AstrHe] 注册工具失败: {exc}")
+
+    # ---------------- 夜间运行 ----------------
+    # ---------------- 事件入口 ----------------
+
+    async def handle_event(self, event: Any) -> None:
+        """记录事件；好友申请按预期联系人规则自动同意。"""
+        await self.recorder.record_event(event)
+        if not self.enabled():
+            return
+        try:
+            raw = event.message_obj.raw_message
+            if (
+                isinstance(raw, dict)
+                and raw.get("post_type") == "request"
+                and raw.get("request_type") == "friend"
+            ):
+                ok = await self.friend_requests.handle_incoming(
+                    str(raw.get("user_id", "")),
+                    str(raw.get("flag", "")),
+                    str(raw.get("comment", "")),
+                )
+                if ok:
+                    self.logger.info("[AstrHe] 已自动同意预期联系人的好友申请")
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ---------------- 夜间运行 ----------------
+
+    def _internal_tools_provider(self, kind: str, **kwargs: Any) -> list:
+        if kind == "reader":
+            window = kwargs.get("window") or self._default_window()
+            reader = ReaderTools(
+                self.storage, self.context, self.tz, lambda: window, self.secrecy
+            )
+            return reader.build()
+        if kind == "draft":
+            return DraftTools(
+                self.storage,
+                kwargs["run_id"],
+                kwargs["request_review_cb"],
+                kwargs["commit_cb"],
+            ).build()
+        return []
+
+    async def run_night(self, mode: str = "auto") -> dict[str, Any]:
+        """调度器与指令共用的入口。"""
+        pipeline = NightPipeline(
+            storage=self.storage,
+            context=self.context,
+            config=self.config,
+            platform_helper=self.platform,
+            qq_client=self.qq,
+            rate_limiter=self.rate_limiter,
+            secrecy_resolver=self.secrecy,
+            admins_getter=self.admins,
+            tz_getter=self.tz,
+            backfiller=self.backfiller,
+            friend_request_manager=self.friend_requests,
+            internal_tools_provider=self._internal_tools_provider,
+            logger=self.logger,
+        )
+        pipeline.alarm_tracker = self.alarm_tracker
+        self._current_pipeline = pipeline
+        try:
+            return await pipeline.run(mode)
+        finally:
+            self._current_pipeline = None
+
+    # ---------------- 指令与状态 ----------------
+
+    async def cmd_run(self, mode: str) -> str:
+        """run / dryrun 指令：开后台任务，立刻回复。"""
+        if not self.enabled():
+            return "AstrHe 还没启用（插件设置里 enabled 是关的）"
+        result = await self.scheduler.trigger(mode)
+        if result is None:
+            return "上一次夜间运行还在进行，等它跑完吧"
+        return "已开始" + ("（演练模式，不提交）" if mode == "dry" else "")
+
+    async def cmd_stop(self) -> str:
+        return await self.scheduler.stop_running()
+
+    async def cmd_status(self) -> str:
+        latest = await self.storage.runs.latest_run()
+        lines = []
+        if self.scheduler.is_running and self._current_pipeline is not None:
+            pipeline = self._current_pipeline
+            elapsed = int(time.time() - pipeline.stage_since)
+            lines.append(
+                f"进行中：当前阶段 {pipeline.stage}，本阶段已用 {elapsed} 秒"
+            )
+        if latest is None:
+            lines.append("还没有运行记录")
+        else:
+            tz = self.tz()
+            started = local_datetime_str(latest["started_at"], tz)
+            lines.append(
+                f"最近一次：{latest['plan_date']} [{latest['mode']}] {latest['status']}"
+                f"（开始于 {started}）"
+            )
+            if latest["error"]:
+                lines.append(f"失败原因：{latest['error']}")
+        plan = await self.storage.plans.get_latest_plan()
+        if plan:
+            lines.append(f"当前生效的规划书：{plan['plan_date']}")
+        return "\n".join(lines)
+
+    def status_dict(self) -> dict[str, Any]:
+        if self.scheduler.is_running and self._current_pipeline is not None:
+            pipeline = self._current_pipeline
+            return {
+                "running": True,
+                "stage": pipeline.stage,
+                "stage_elapsed_seconds": int(time.time() - pipeline.stage_since),
+            }
+        return {"running": False}
