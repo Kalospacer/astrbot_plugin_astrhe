@@ -299,6 +299,26 @@ class ScheduleToolImpl:
         extras = getattr(event, "_extras", None) or {}
         return isinstance(extras, dict) and "cron_payload" in extras
 
+    async def _hidden_from_caller(self, event: Any, alarm: dict, sender_id: str) -> bool:
+        """与闹钟列表同一套保密判断：对当前调用者保密的闹钟当作不存在。"""
+        current_umo = ""
+        try:
+            current_umo = event_umo(event)
+        except Exception:  # noqa: BLE001
+            pass
+        present = (
+            await self.secrecy_resolver.present_ids(current_umo)
+            if current_umo
+            else set()
+        )
+        card = json.loads(alarm["card_json"] or "{}")
+        return not is_secret_visible_here(
+            card.get("secret_from") or [],
+            viewer_id=sender_id if not self._is_cron_event(event) else "",
+            session_umo=current_umo,
+            present_ids=present,
+        )
+
     # ---------------- edit / cancel ----------------
 
     async def _edit(self, event: Any, **kwargs: Any) -> str:
@@ -309,7 +329,8 @@ class ScheduleToolImpl:
         except (TypeError, ValueError):
             return "edit 需要 alarm_id（闹钟编号）"
         alarm = await self.storage.alarms.get_alarm(alarm_id)
-        if alarm is None:
+        # 保密闹钟与不存在的编号同样回复，连「这个编号存在」也不透露
+        if alarm is None or await self._hidden_from_caller(event, alarm, sender_id):
             return f"找不到闹钟 #{alarm_id}"
         deny = self._check_manage(event, alarm, is_admin)
         if deny:
@@ -435,7 +456,8 @@ class ScheduleToolImpl:
         except (TypeError, ValueError):
             return "cancel 需要 alarm_id（AstrHe 闹钟编号）或 job_id（外部任务）"
         alarm = await self.storage.alarms.get_alarm(alarm_id)
-        if alarm is None:
+        # 保密闹钟与不存在的编号同样回复，连「这个编号存在」也不透露
+        if alarm is None or await self._hidden_from_caller(event, alarm, sender_id):
             return f"找不到闹钟 #{alarm_id}"
         deny = self._check_manage(event, alarm, is_admin)
         if deny:

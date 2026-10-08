@@ -35,7 +35,7 @@ def normalize_secret_text(text: str) -> str:
         raise ValueError("段落需要是文本")
     for match in _SECRET_BLOCK.finditer(text):
         ids = parse_secret_mark(match.group(1))
-        if not ids or not all(q.isdigit() for q in ids):
+        if not ids or not all(is_valid_qq(q) for q in ids):
             raise ValueError("保密标记需填写 QQ 号：【保密:QQ号】内容【/保密】")
     remainder = _SECRET_BLOCK.sub("", text)
     if "【保密" in remainder or "【/保密" in remainder:

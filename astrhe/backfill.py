@@ -70,7 +70,8 @@ class Backfiller:
         """返回 (群号列表, 私聊 QQ 列表)。
 
         候选 = 窗口内账本有消息的会话 ∪ 窗口内触发过的 AstrHe 闹钟目标
-        ∪（冷启动或窗口有空档时）bot 所在的全部群和近期私聊。
+        ∪ bot 所在的全部群（每晚都枚举，停机期间说过话的安静群也能补齐）
+        ∪（冷启动或窗口有空档时）近期私聊。
         """
         groups: set[str] = set()
         friends: set[str] = set()
@@ -99,19 +100,22 @@ class Backfiller:
             elif mtype == "FriendMessage":
                 friends.add(sid)
 
-        # 冷启动（尚未成功提交），或窗口有长时间空档（停用后重新启用、连续失败），
-        # 都回溯全部群与近期私聊：空档期间没有实时记录的会话也要补齐
+        # 全部群每晚都枚举：群的数量有限，安静的群一页就翻到窗口起点，代价很小；
+        # 停机或停用期间插件没记到的群聊也能补齐
+        try:
+            group_list = await self.platform.call_action("get_group_list")
+            for g in group_list or []:
+                gid = str(g.get("group_id", ""))
+                if gid:
+                    groups.add(gid)
+        except Exception as exc:  # noqa: BLE001
+            self.logger.debug(f"[AstrHe] 取群列表失败: {exc}")
+
+        # 近期私聊可能很多，只在冷启动（尚未成功提交）或窗口有长时间空档
+        # （停用后重新启用、连续失败）时全量回溯
         last = await self.storage.runs.latest_committed_run()
         gap = utc_now() - window_start > C.BACKFILL_FULL_SCAN_GAP_SECONDS
         if last is None or gap:
-            try:
-                group_list = await self.platform.call_action("get_group_list")
-                for g in group_list or []:
-                    gid = str(g.get("group_id", ""))
-                    if gid:
-                        groups.add(gid)
-            except Exception as exc:  # noqa: BLE001
-                self.logger.debug(f"[AstrHe] 冷启动取群列表失败: {exc}")
             try:
                 contacts = await self.platform.call_action(
                     "get_recent_contact", count=100
@@ -123,7 +127,7 @@ class Backfiller:
                         if uid:
                             friends.add(uid)
             except Exception as exc:  # noqa: BLE001
-                self.logger.debug(f"[AstrHe] 冷启动取近期会话失败: {exc}")
+                self.logger.debug(f"[AstrHe] 取近期会话失败: {exc}")
 
         return sorted(groups), sorted(friends)
 

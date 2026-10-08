@@ -168,11 +168,17 @@ async def validate_night_alarm_frequency(
 
     active = active or []
     excluded_alarm_ids = excluded_alarm_ids or set()
+    # 重复闹钟看「还会不会继续响」：某次执行中断被标为 failed 时，平台任务仍在，
+    # 照常计数；一次性闹钟取消或失败就不再计数
     alarms = [
         a
         for a in await storage.alarms.list_alarms(-1)
-        if a["status"] not in ("cancelled", "failed")
-        and a["id"] not in excluded_alarm_ids
+        if a["id"] not in excluded_alarm_ids
+        and (
+            is_live_alarm(a)
+            if a["cron_expression"]
+            else a["status"] not in ("cancelled", "failed")
+        )
     ]
     if (
         sum(a["created_run_id"] == run_id for a in alarms) + len(active)

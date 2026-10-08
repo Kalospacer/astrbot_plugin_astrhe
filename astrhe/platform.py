@@ -8,7 +8,8 @@ from typing import Any
 #: UMO 格式：{platform_id}:{MessageType}:{session_id}
 #: 例如 default:GroupMessage:12345 / default:FriendMessage:67890
 
-_QQ_ID_PATTERN = re.compile(r"^\d{5,12}$")
+#: 只认半角数字：\d 会放行全角数字，存进去后与真实 QQ 号永远对不上
+_QQ_ID_PATTERN = re.compile(r"^[0-9]{5,12}$")
 
 
 def parse_umo(umo: str) -> tuple[str, str, str]:

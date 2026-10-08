@@ -3,6 +3,7 @@ add_active_job 参数（sender_id / origin / astrhe_alarm_id）。"""
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -129,7 +130,14 @@ async def _main(tmp_path):
         # 取消：非管理员不能取消别的会话的闹钟
         cancel_deny = await impl.run(member_event, action="cancel", alarm_id=2)
         assert "当前会话" in cancel_deny
-        cancel_ok = await impl.run(admin_event, action="cancel", alarm_id=1)
+        # 对管理员本人保密的 #1（生日惊喜）在聊天里同样查不到，需要时走面板
+        assert await impl.run(admin_event, action="cancel", alarm_id=1) == "找不到闹钟 #1"
+        open_alarm = next(
+            a["id"]
+            for a in await s.alarms.list_alarms(-1)
+            if not json.loads(a["card_json"]).get("secret_from")
+        )
+        cancel_ok = await impl.run(admin_event, action="cancel", alarm_id=open_alarm)
         assert "已取消" in cancel_ok
         assert ctx.cron_manager.deleted  # 对应 cron 任务被删除
 

@@ -311,18 +311,23 @@ def test_daily_frequency_counts_repeating_alarms_on_the_target_date(tmp_path):
     arun(check())
 
 
-def test_backfill_enumerates_all_groups_after_a_long_gap(tmp_path):
+def test_backfill_scans_all_groups_nightly_and_private_chats_after_a_gap(tmp_path):
     async def check():
         s = await make_storage(tmp_path)
         try:
             rid = await s.runs.start_run(plan_date="2026-10-01")
             await s.runs.finish_run(rid, "committed")
-            ctx, logger = FakeContext(), FakeLogger()
+            ctx = FakeContext(
+                {"get_recent_contact": [{"chatType": 1, "user_id": 40004}]}
+            )
+            logger = FakeLogger()
             backfill = Backfiller(s, PlatformHelper(ctx, logger), logger)
-            groups, _ = await backfill.candidate_sessions(utc_now() - 20 * 3600)
-            assert groups == []
-            groups, _ = await backfill.candidate_sessions(utc_now() - 14 * 86400)
-            assert groups == ["20002"]
+            # 正常一晚：全部群照常枚举，私聊不全量回溯
+            groups, friends = await backfill.candidate_sessions(utc_now() - 20 * 3600)
+            assert groups == ["20002"] and friends == []
+            # 停用两周后：私聊也全量回溯
+            groups, friends = await backfill.candidate_sessions(utc_now() - 14 * 86400)
+            assert groups == ["20002"] and friends == ["40004"]
         finally:
             await s.close()
 
