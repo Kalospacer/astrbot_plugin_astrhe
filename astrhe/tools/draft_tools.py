@@ -19,7 +19,7 @@ from .validation import (
     validate_anniversaries,
     validate_night_alarm_frequency,
 )
-from .secrecy import normalize_secret_text
+from .secrecy import normalize_qq_ids, normalize_secret_text
 
 
 class DraftTools:
@@ -185,7 +185,7 @@ class DraftTools:
         payload = {
             "content": content,
             "visible_umos": [self._resolve(u) for u in umos],
-            "secret_from": self._json_list(kw.get("secret_from")),
+            "secret_from": normalize_qq_ids(self._json_list(kw.get("secret_from"))),
             "due_kind": str(kw.get("due_kind", "today") or "today"),
             "due_date": str(kw.get("due_date", "") or ""),
             "show_from": str(kw.get("show_from", "") or ""),
@@ -228,8 +228,8 @@ class DraftTools:
                 "purpose": str(kw.get("purpose", "")),
                 "how": str(kw.get("how", "")),
                 "involved": self._json_list(kw.get("involved")),
-                "mentions": self._json_list(kw.get("mentions")),
-                "secret_from": self._json_list(kw.get("secret_from")),
+                "mentions": normalize_qq_ids(self._json_list(kw.get("mentions"))),
+                "secret_from": normalize_qq_ids(self._json_list(kw.get("secret_from"))),
                 "taboo": str(kw.get("taboo", "") or ""),
                 "agreed": bool(kw.get("agreed", False)),
                 "agreed_reason": str(kw.get("agreed_reason", "") or ""),

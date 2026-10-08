@@ -55,7 +55,7 @@ class AstrHeRuntime:
         self.recorder = Recorder(self.storage, logger, self.enabled)
         self.backfiller = Backfiller(self.storage, self.platform, logger)
         self.friend_requests = FriendRequestManager(self.storage, self.qq, logger)
-        self.day_tools = DayTools(self.storage, self.tz)
+        self.day_tools = DayTools(self.storage, self.tz, self.secrecy)
         self.schedule_impl = ScheduleToolImpl(
             self.storage,
             context,

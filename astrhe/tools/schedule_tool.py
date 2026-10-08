@@ -21,7 +21,7 @@ from ..timeutil import (
     local_datetime_str,
     utc_now,
 )
-from .secrecy import filter_secret_text, is_secret_visible_here
+from .secrecy import filter_secret_text, is_secret_visible_here, normalize_qq_ids
 
 TOOL_NAME = "astrhe_schedule"
 
@@ -150,12 +150,14 @@ class ScheduleToolImpl:
         for key in ("background", "purpose", "how"):
             if not card[key]:
                 return f"卡片缺少「{key}」：闹钟要讲清楚来龙去脉，被叫醒时只看卡片就要能办成事"
-        if isinstance(card["mentions"], str):
-            card["mentions"] = [card["mentions"]]
         if isinstance(card["involved"], str):
             card["involved"] = [card["involved"]]
-        if isinstance(card["secret_from"], str):
-            card["secret_from"] = [card["secret_from"]]
+        try:
+            # QQ 号统一成字符串，避免数字与字符串比较失配导致保密失效
+            for key in ("mentions", "secret_from"):
+                card[key] = normalize_qq_ids(card[key])
+        except ValueError as exc:
+            return f"闹钟未创建：{exc}"
 
         try:
             checked, friend_warning = await validate_alarm(
@@ -324,6 +326,11 @@ class ScheduleToolImpl:
             if kwargs.get(key):
                 value = kwargs[key]
                 card[key] = [value] if isinstance(value, str) else value
+        try:
+            for key in ("mentions", "secret_from"):
+                card[key] = normalize_qq_ids(card.get(key))
+        except ValueError as exc:
+            return f"闹钟未修改：{exc}"
         note_text = render_card_note(card, alarm["target_umo"])
         run_at_str = str(kwargs.get("run_at", "") or "")
         tz = self._tz_getter()
@@ -375,6 +382,26 @@ class ScheduleToolImpl:
                 )
             except ValueError as exc:
                 return str(exc)
+        if alarm["cron_job_id"] and not run_at_str:
+            # 只改卡片：先同步平台任务里的 note，成功后再改本地，避免唤醒时仍用旧卡片
+            try:
+                job_list = await self.context.cron_manager.list_jobs("active_agent")
+                job = next(
+                    (j for j in job_list if j.job_id == alarm["cron_job_id"]), None
+                )
+                if job is None:
+                    return "修改失败：平台上找不到这个闹钟的定时任务，卡片未改"
+                payload = dict(job.payload or {})
+                payload["note"] = note_text
+                updated = await self.context.cron_manager.update_job(
+                    alarm["cron_job_id"],
+                    payload=payload,
+                    description=alarm_description(card, alarm_id),
+                )
+                if updated is None:
+                    return "修改失败：平台没有更新这个定时任务，卡片未改"
+            except Exception as exc:  # noqa: BLE001
+                return f"修改失败，卡片未改：{exc}"
         # 更新卡片与 note
         await self.storage.db.execute(
             "UPDATE alarms SET card_json=?, note_text=?, run_at=COALESCE(?, run_at),"
@@ -388,23 +415,6 @@ class ScheduleToolImpl:
                 alarm_id,
             ),
         )
-        if alarm["cron_job_id"] and not run_at_str:
-            # 只改卡片：同步更新 cron 任务里的 note
-            try:
-                job_list = await self.context.cron_manager.list_jobs("active_agent")
-                job = next(
-                    (j for j in job_list if j.job_id == alarm["cron_job_id"]), None
-                )
-                if job is not None:
-                    payload = dict(job.payload or {})
-                    payload["note"] = note_text
-                    await self.context.cron_manager.update_job(
-                        alarm["cron_job_id"],
-                        payload=payload,
-                        description=alarm_description(card, alarm_id),
-                    )
-            except Exception:  # noqa: BLE001
-                pass
         return f"闹钟 #{alarm_id} 已更新"
 
     async def _cancel(self, event: Any, **kwargs: Any) -> str:
@@ -433,8 +443,9 @@ class ScheduleToolImpl:
         if alarm["cron_job_id"]:
             try:
                 await self.context.cron_manager.delete_job(alarm["cron_job_id"])
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                # 平台任务没删掉就不能标记已取消，否则重启后它会恢复
+                return f"取消失败，闹钟保持原状态：{exc}"
         await self.storage.alarms.set_status(alarm_id, "cancelled")
         return f"闹钟 #{alarm_id} 已取消"
 

@@ -14,6 +14,7 @@ from typing import Any
 
 from . import constants as C
 from .platform import PlatformHelper, friend_umo, group_umo
+from .timeutil import utc_now
 from .storage import Storage
 
 _NO_MESSAGE_PATTERN = re.compile(
@@ -69,7 +70,7 @@ class Backfiller:
         """返回 (群号列表, 私聊 QQ 列表)。
 
         候选 = 窗口内账本有消息的会话 ∪ 窗口内触发过的 AstrHe 闹钟目标
-        ∪（冷启动时）bot 所在的全部群和近期私聊。
+        ∪（冷启动或窗口有空档时）bot 所在的全部群和近期私聊。
         """
         groups: set[str] = set()
         friends: set[str] = set()
@@ -98,9 +99,11 @@ class Backfiller:
             elif mtype == "FriendMessage":
                 friends.add(sid)
 
-        # 冷启动：尚未成功提交时回溯全部群与近期私聊
+        # 冷启动（尚未成功提交），或窗口有长时间空档（停用后重新启用、连续失败），
+        # 都回溯全部群与近期私聊：空档期间没有实时记录的会话也要补齐
         last = await self.storage.runs.latest_committed_run()
-        if last is None:
+        gap = utc_now() - window_start > C.BACKFILL_FULL_SCAN_GAP_SECONDS
+        if last is None or gap:
             try:
                 group_list = await self.platform.call_action("get_group_list")
                 for g in group_list or []:

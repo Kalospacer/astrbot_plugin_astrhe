@@ -156,7 +156,12 @@ class Planner:
         )
 
         latest_plan = await self.storage.plans.get_latest_plan()
-        yesterday_plan = latest_plan["full_text"] if latest_plan else ""
+        # 标出具体规划日：停用或连续失败后，最近一份未必是昨天的
+        yesterday_plan = (
+            f"（规划日 {latest_plan['plan_date']}）\n{latest_plan['full_text']}"
+            if latest_plan
+            else ""
+        )
 
         cron_text = await night_alarm_materials(self.storage, tz, self.admins)
         cron_text += "\n" + await platform_tasks(self.storage, self.context)

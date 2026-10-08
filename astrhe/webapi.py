@@ -130,8 +130,10 @@ class WebApi:
         if alarm["cron_job_id"]:
             try:
                 await self.context.cron_manager.delete_job(alarm["cron_job_id"])
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                return astrbot_web.error_response(
+                    f"取消失败，闹钟保持原状态：{exc}", status_code=500
+                )
         await self.storage.alarms.set_status(alarm_id, "cancelled")
         return astrbot_web.json_response({"ok": True})
 

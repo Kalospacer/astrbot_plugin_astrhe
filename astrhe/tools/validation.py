@@ -10,9 +10,32 @@ from apscheduler.triggers.cron import CronTrigger
 
 from .. import constants as C
 from ..platform import parse_umo, resolve_session_ref
+from ..storage.alarms import is_live_alarm
 from ..timeutil import is_quiet_time, parse_run_at, utc_now
 
+try:  # 与 AstrBot 调度一致的星期换算（标准 crontab 0/7=周日）
+    from astrbot.core.cron.manager import _normalize_crontab_day_of_week
+except ImportError:  # pragma: no cover - 没有该函数的 AstrBot 版本按原样解析
+    _normalize_crontab_day_of_week = None
+
 ANNIVERSARY_EXAMPLE = '[{"name":"生日","date":"10-11"}]'
+
+
+def cron_trigger(cron_expression: str, tz: Any) -> CronTrigger:
+    """按 AstrBot 的方式解析重复规则；APScheduler 的数字星期是周一=0，需先换算。"""
+    fields = str(cron_expression or "").split()
+    if len(fields) != 5:
+        raise ValueError("重复规则需要 5 段：分 时 日 月 星期")
+    if _normalize_crontab_day_of_week is not None:
+        fields[4] = _normalize_crontab_day_of_week(fields[4])
+    return CronTrigger.from_crontab(" ".join(fields), timezone=tz)
+
+
+def fires_on_date(cron_expression: str, date_str: str, tz: Any) -> bool:
+    """重复规则在某个本地日期是否会触发。"""
+    day = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=tz)
+    fire = cron_trigger(cron_expression, tz).get_next_fire_time(None, day)
+    return fire is not None and fire.strftime("%Y-%m-%d") == date_str
 
 
 def validate_anniversaries(value: Any) -> list:
@@ -67,7 +90,7 @@ def validate_alarm_time(
     if not allow_repeat:
         raise ValueError("只有管理员或夜间主 agent 能建重复闹钟")
     try:
-        trigger = CronTrigger.from_crontab(cron_expression, timezone=tz)
+        trigger = cron_trigger(cron_expression, tz)
     except ValueError as exc:
         raise ValueError(f"重复规则不合法：{exc}") from exc
     cursor = datetime.fromtimestamp(now, tz)
@@ -161,20 +184,23 @@ async def validate_night_alarm_frequency(
     for alarm in alarms:
         if alarm["target_umo"] != payload["target_umo"]:
             continue
-        run_at = alarm["run_at"]
-        if run_at is None and alarm["cron_expression"]:
-            trigger = CronTrigger.from_crontab(alarm["cron_expression"], timezone=tz)
-            fire = trigger.get_next_fire_time(
-                None, datetime.fromtimestamp(utc_now(), tz)
-            )
-            run_at = fire.timestamp() if fire else None
-        if run_at is not None and local_date_str(run_at, tz) == date:
+        if alarm["cron_expression"]:
+            # 重复闹钟按「目标日期当天会不会触发」计数，而不是只看下一次
+            if is_live_alarm(alarm) and fires_on_date(
+                alarm["cron_expression"], date, tz
+            ):
+                count += 1
+        elif (
+            alarm["run_at"] is not None and local_date_str(alarm["run_at"], tz) == date
+        ):
             count += 1
-    count += sum(
-        a["target_umo"] == payload["target_umo"]
-        and local_date_str(a["next_run_at"], tz) == date
-        for a in active
-    )
+    for draft in active:
+        if draft["target_umo"] != payload["target_umo"]:
+            continue
+        if draft.get("cron_expression"):
+            count += fires_on_date(draft["cron_expression"], date, tz)
+        else:
+            count += local_date_str(draft["next_run_at"], tz) == date
     if count >= C.RATE_ALARM_SAME_TARGET_PER_DAY:
         raise ValueError("同一目标每天的主动闹钟达到频率上限")
 

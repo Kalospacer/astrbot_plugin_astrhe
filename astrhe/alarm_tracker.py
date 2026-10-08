@@ -1,7 +1,7 @@
 """闹钟跟踪与对账。
 
 - 生命周期与发送结果分离：fired/done 状态，send_ok/send_failed 事件。
-- 手动提前执行记 manual_run 事件，并停用一次性任务避免重复触发。
+- 手动提前执行记 manual_run 事件；一次性闹钟开始执行即停用平台任务，避免面板立即执行后到点再跑一次。
 - 完整回流窗口内的执行、发送失败、缺失和中断；触发一小时内不判中断。
 - 停机错过的一次性闹钟、平台任务已消失的重复闹钟，判为失踪并删掉残留任务。
 """
@@ -15,7 +15,7 @@ from typing import Any
 from . import constants as C
 from .timeutil import local_datetime_str, utc_now
 
-#: 判断「立即执行」的容差（秒）
+#: 判断「立即执行」的容差（秒）：比原定时间早这么多才标记为立即执行；只影响对账标签
 MANUAL_RUN_TOLERANCE = 300
 
 _SEND_OK_PREFIX = "Message sent to session"
@@ -53,18 +53,20 @@ class AlarmTracker:
         cron_job = extras.get("cron_job") or {}
         run_started_at = str(cron_job.get("run_started_at", "") or "")
         run_at = alarm["run_at"]
+        manual = False
         if run_at and run_started_at:
             try:
                 started_ts = datetime.fromisoformat(run_started_at).timestamp()
-                if started_ts < float(run_at) - MANUAL_RUN_TOLERANCE:
-                    await self.storage.alarms.add_event(alarm["id"], "manual_run")
-                    await self.storage.alarms.set_status(alarm["id"], "fired")
-                    await self._disable_run_once(alarm)
-                    return
+                manual = started_ts < float(run_at) - MANUAL_RUN_TOLERANCE
             except (ValueError, TypeError):
                 pass
-        await self.storage.alarms.add_event(alarm["id"], "fired")
+        await self.storage.alarms.add_event(
+            alarm["id"], "manual_run" if manual else "fired"
+        )
         await self.storage.alarms.set_status(alarm["id"], "fired")
+        # 一次性闹钟一开始执行就停用平台任务：到点执行的 AstrBot 跑完会自行删除；
+        # 面板「立即执行」不删除任务，停用后原定时间不会再跑一次（含临近原定时间的点击）
+        await self._disable_run_once(alarm)
 
     async def on_llm_tool_respond(
         self, event: Any, tool: Any, tool_args: Any, tool_result: Any
