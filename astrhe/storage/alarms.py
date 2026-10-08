@@ -8,14 +8,19 @@ from typing import Any
 from .db import Database
 from ..timeutil import utc_now
 
+#: 生效中：一次性闹钟等待或执行中；重复闹钟只要平台任务还在且未取消、未失踪，
+#: 上一次执行失败也照常算生效（任务仍会按规则继续触发）。
 LIVE_ALARM_SQL = (
-    "(status IN ('scheduled','fired') OR (cron_expression!='' AND status!='cancelled'))"
+    "(status IN ('scheduled','fired') OR (cron_expression!='' AND cron_job_id!=''"
+    " AND status NOT IN ('cancelled','missing')))"
 )
 
 
 def is_live_alarm(alarm: dict) -> bool:
     return alarm["status"] in ("scheduled", "fired") or bool(
-        alarm["cron_expression"] and alarm["status"] != "cancelled"
+        alarm["cron_expression"]
+        and alarm["cron_job_id"]
+        and alarm["status"] not in ("cancelled", "missing")
     )
 
 
@@ -66,12 +71,15 @@ class AlarmsRepo:
     async def set_status(
         self, alarm_id: int, status: str, result_note: str | None = None
     ) -> None:
+        # 进入终态时记下结束时间，供 30 天清理判断；重复闹钟只有取消、失踪，
+        # 或者平台任务根本没建成时才算结束。
         await self.db.execute(
             "UPDATE alarms SET status=?, result_note=COALESCE(?, result_note),"
-            " finished_at=CASE WHEN ?='cancelled' OR "
-            "(cron_expression='' AND ? IN ('done','failed','missing')) "
-            "THEN COALESCE(finished_at, ?) ELSE NULL END WHERE id=?",
-            (status, result_note, status, status, utc_now(), alarm_id),
+            " finished_at=CASE WHEN ?='cancelled'"
+            " OR (cron_expression='' AND ? IN ('done','failed','missing'))"
+            " OR (cron_expression!='' AND (?='missing' OR (?='failed' AND cron_job_id='')))"
+            " THEN COALESCE(finished_at, ?) ELSE NULL END WHERE id=?",
+            (status, result_note, status, status, status, status, utc_now(), alarm_id),
         )
 
     async def set_status_by_job(
@@ -120,6 +128,14 @@ class AlarmsRepo:
             f"SELECT * FROM alarms WHERE NOT {LIVE_ALARM_SQL}"
             " ORDER BY id DESC LIMIT ? OFFSET ?",
             (limit, offset),
+        )
+
+    async def finished_since(self, since_ts: float) -> list[dict]:
+        """在 since_ts 之后结束的闹钟（夜间材料只展示最近一段）。"""
+        return await self.db.fetchall(
+            f"SELECT * FROM alarms WHERE NOT {LIVE_ALARM_SQL}"
+            " AND COALESCE(finished_at, run_at, created_at)>=? ORDER BY id DESC",
+            (since_ts,),
         )
 
     async def count_alarms(self, scope: str) -> int:

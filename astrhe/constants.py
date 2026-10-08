@@ -102,8 +102,18 @@ QUIET_HOURS_END_MINUTES = 8 * 60  # 08:00
 # 账本与缓存
 # ---------------------------------------------------------------------------
 
-#: messages / notices / friend_requests 保留秒数（30 天）
+#: 聊天账本与过程记录的保留秒数（30 天）；没复盘过的消息与闹钟结果不受此限
 LEDGER_RETENTION_SECONDS = 30 * 24 * 3600
+
+#: 一次性闹钟过了原定时间多久仍无执行记录，判为错过（AstrBot 宽限只有 5 分钟）
+ALARM_LOST_GRACE_SECONDS = 3600
+
+#: 夜间材料只列这么多天内结束的闹钟，更早的用 astrhe_read_alarms 翻页
+NIGHT_FINISHED_ALARM_DAYS = 7
+
+#: SQLite WAL 文件的大小上限，避免一次大批量清理后长期占着空间
+SQLITE_JOURNAL_SIZE_LIMIT = 64 * 1024 * 1024
+
 ALARM_HISTORY_PAGE_SIZE = 50
 MEMORY_SEARCH_PAGE_SIZE = 30
 MEMORY_PLAN_PAGE_SIZE = 60

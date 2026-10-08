@@ -144,6 +144,32 @@ class MemoryRepo:
                 await self.db.conn.rollback()
                 raise
 
+    async def move_to_trash(self, kind, target, reason="管理员在查看页删除"):
+        """查看页删除：放进回收站，30 天内可恢复，满期后由清理硬删除。"""
+        async with self.db.write_lock:
+            try:
+                await self.db.conn.execute("BEGIN")
+                before = await self.get_entry(kind, target)
+                if before is None:
+                    raise ValueError("找不到这条记录")
+                if before["deleted_at"] is not None:
+                    raise ValueError("这条记录已经在回收站里")
+                now = utc_now()
+                result = await self._write_revision(
+                    before,
+                    kind,
+                    {"deleted_at": now, "deleted_reason": reason},
+                    "delete",
+                    reason,
+                    None,
+                    now,
+                )
+                await self.db.conn.commit()
+                return result
+            except BaseException:
+                await self.db.conn.rollback()
+                raise
+
     async def revert(self, revision_id, reason=""):
         async with self.db.write_lock:
             try:

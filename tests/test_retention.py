@@ -52,6 +52,9 @@ def test_cleanup_history_keeps_live_memory_and_window_anchor(tmp_path):
             repeat, _ = await seed(s, ctx, repeat=True)
             await s.alarms.set_status(repeat, "failed")
             for aid in (completed, live, repeat):
+                # 更早一轮的触发应被清掉；最近一次触发及之后的流水保留
+                await s.alarms.add_event(aid, "fired", ts=old - 50)
+                await s.alarms.add_event(aid, "done", ts=old - 40)
                 await s.alarms.add_event(aid, "fired", ts=old)
                 await s.alarms.add_event(aid, "done", ts=utc_now())
             await s.db.execute(
@@ -104,7 +107,11 @@ def test_cleanup_history_keeps_live_memory_and_window_anchor(tmp_path):
             assert not await s.alarms.events(completed)
             for aid in (live, repeat):
                 assert await s.alarms.get_alarm(aid)
-                assert len(await s.alarms.events(aid)) == 1
+                kept = await s.alarms.events(aid)
+                assert [(e["kind"], e["ts"] >= old) for e in kept] == [
+                    ("fired", True),
+                    ("done", True),
+                ]
             assert await s.plans.get_plan_by_date("2026-08-01")
             assert await s.plans.get_todo(todo)
             assert await s.plans.list_promises()

@@ -439,7 +439,11 @@ class ScheduleToolImpl:
         return f"闹钟 #{alarm_id} 已取消"
 
     def _check_manage(self, event: Any, alarm: dict, is_admin: bool) -> str:
-        """非管理员只能操作当前会话的 AstrHe 闹钟；返回空串表示允许。"""
+        """非管理员只能操作当前会话的 AstrHe 闹钟；返回空串表示允许。
+
+        管理员亲自安排的闹钟只有管理员能改或取消，群友的话不算（与夜间撤销
+        必须附管理员依据的规则一致）。
+        """
         if is_admin:
             return ""
         current_umo = ""
@@ -449,4 +453,7 @@ class ScheduleToolImpl:
             pass
         if alarm["target_umo"] != current_umo:
             return "只能操作当前会话的闹钟"
+        admins = {str(x) for x in (self._admins_getter() or []) if str(x).isdigit()}
+        if str(alarm["creator_id"]) in admins:
+            return "这是管理员亲自安排的闹钟，只有管理员能修改或取消"
         return ""

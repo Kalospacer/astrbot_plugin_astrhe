@@ -119,8 +119,7 @@ class WebApi:
     async def _todo_delete(self):
         payload = await self._json_body()
         todo_id = int(payload.get("todo_id", 0) or 0)
-        ok = await self.storage.plans.update_todo_status(todo_id, "dropped", "面板删除")
-        return astrbot_web.json_response({"ok": ok})
+        return await self._move_to_trash("todo", todo_id)
 
     async def _alarm_cancel(self):
         payload = await self._json_body()
@@ -172,8 +171,15 @@ class WebApi:
     async def _promise_delete(self):
         payload = await self._json_body()
         promise_id = int(payload.get("promise_id", 0) or 0)
-        ok = await self.storage.plans.update_promise_status(promise_id, "dropped")
-        return astrbot_web.json_response({"ok": ok})
+        return await self._move_to_trash("promise", promise_id)
+
+    async def _move_to_trash(self, kind: str, target_id: int):
+        """删除不对的条目：进回收站，30 天内可用 /memory/restore 恢复。"""
+        try:
+            await self.storage.memory.move_to_trash(kind, target_id)
+        except ValueError as exc:
+            return astrbot_web.error_response(str(exc), status_code=400)
+        return astrbot_web.json_response({"ok": True, "trash": True})
 
     # ---------------- 工具 ----------------
 

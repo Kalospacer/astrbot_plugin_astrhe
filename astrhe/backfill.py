@@ -314,8 +314,3 @@ class Backfiller:
             )
             return row_id is not None
         return False
-
-    async def cleanup_old(self, now_ts: float) -> tuple[int, int]:
-        """清理超过 30 天的消息、通知和好友申请。"""
-        cutoff = now_ts - C.LEDGER_RETENTION_SECONDS
-        return await self.storage.ledger.cleanup(cutoff)

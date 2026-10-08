@@ -3,6 +3,7 @@
 - 生命周期与发送结果分离：fired/done 状态，send_ok/send_failed 事件。
 - 手动提前执行记 manual_run 事件，并停用一次性任务避免重复触发。
 - 完整回流窗口内的执行、发送失败、缺失和中断；触发一小时内不判中断。
+- 停机错过的一次性闹钟、平台任务已消失的重复闹钟，判为失踪并删掉残留任务。
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import json
 from datetime import datetime
 from typing import Any
 
+from . import constants as C
 from .timeutil import local_datetime_str, utc_now
 
 #: 判断「立即执行」的容差（秒）
@@ -130,19 +132,59 @@ class AlarmTracker:
 
     # ---------------- 夜间对账 ----------------
 
+    async def _list_jobs(self) -> tuple[dict, bool]:
+        """返回 (平台任务表, 是否读取成功)；读取失败时不能据此判断任务缺失。"""
+        try:
+            jobs = await self.context.cron_manager.list_jobs("active_agent")
+        except Exception as exc:  # noqa: BLE001
+            self.logger.debug(f"[AstrHe] 读取平台任务失败: {exc}")
+            return {}, False
+        return {j.job_id: j for j in jobs}, True
+
+    async def finish_lost_alarms(self, jobs: dict, jobs_ok: bool) -> set[int]:
+        """把再也不会触发的生效中闹钟判为失踪，并删掉平台上的残留任务。
+
+        - 一次性闹钟过了原定时间一小时仍无执行记录：AstrBot 停机错过 5 分钟
+          宽限后只丢弃这次触发，任务行留在表里却永远不会再跑。
+        - 重复闹钟的平台任务已经不存在（例如在面板里被删除）。
+        """
+        now = utc_now()
+        lost: set[int] = set()
+        for alarm in await self.storage.alarms.live_alarms():
+            note = ""
+            if not alarm["cron_expression"]:
+                if (
+                    alarm["status"] == "scheduled"
+                    and alarm["run_at"] is not None
+                    and alarm["run_at"] < now - C.ALARM_LOST_GRACE_SECONDS
+                    and not any(
+                        e["kind"] in ("fired", "manual_run")
+                        for e in await self.storage.alarms.events(alarm["id"])
+                    )
+                ):
+                    note = "错过：原定时间已过仍没有执行（可能因停机），不会再触发"
+            elif jobs_ok and alarm["cron_job_id"] not in jobs:
+                note = "重复任务在平台上已不存在（可能被面板删除），不会再触发"
+            if not note:
+                continue
+            # 状态、原因和结束时间都记在闹钟本身；不另记事件，免得次晚对账重复出现
+            await self.storage.alarms.set_status(alarm["id"], "missing", note)
+            lost.add(alarm["id"])
+            if alarm["cron_job_id"] in jobs:
+                try:
+                    await self.context.cron_manager.delete_job(alarm["cron_job_id"])
+                except Exception as exc:  # noqa: BLE001
+                    self.logger.debug(f"[AstrHe] 删除残留任务失败: {exc}")
+        return lost
+
     async def nightly_reconcile(self, window_start=0, window_end=None) -> str:
         """完整回流窗口内触发或应触发的闹钟，发送结果独立于生命周期。"""
         await self.finalize_stale_started()
         now = utc_now() if window_end is None else window_end
         tz = self._tz_getter()
-        cron_jobs = {}
-        try:
-            cron_jobs = {
-                j.job_id: j
-                for j in await self.context.cron_manager.list_jobs("active_agent")
-            }
-        except Exception:
-            pass
+        cron_jobs, jobs_ok = await self._list_jobs()
+        # 不限于本窗口：停机错过的闹钟可能早于窗口起点，也要一次结清。
+        lost = await self.finish_lost_alarms(cron_jobs, jobs_ok)
         lines = []
         for alarm in await self.storage.alarms.list_alarms(-1):
             events = await self.storage.alarms.events(alarm["id"], window_start, now)
@@ -152,12 +194,12 @@ class AlarmTracker:
                 alarm["status"] == "failed"
                 and window_start <= alarm["created_at"] <= now
             )
-            if not events and not due and not failed:
+            if not events and not due and not failed and alarm["id"] not in lost:
                 continue
             all_events = await self.storage.alarms.events(alarm["id"])
             fired = any(e["kind"] in ("fired", "manual_run") for e in all_events)
             status = alarm["status"]
-            if due and status == "scheduled" and not fired:
+            if due and status == "scheduled" and not fired and jobs_ok:
                 job = cron_jobs.get(alarm["cron_job_id"])
                 if job is None or not job.enabled:
                     status = "missing"

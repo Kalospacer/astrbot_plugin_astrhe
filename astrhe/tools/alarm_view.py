@@ -4,7 +4,7 @@ import json
 
 from .. import constants as C
 from ..storage.alarms import is_live_alarm
-from ..timeutil import local_datetime_str
+from ..timeutil import local_datetime_str, utc_now
 
 CARD_LABELS = {
     "background": "背景",
@@ -93,11 +93,16 @@ async def night_alarm_materials(storage, tz, admins=()):
     lines = ["【生效中的 AstrHe 闹钟】"]
     for alarm in await storage.alarms.live_alarms():
         lines.append(await full_alarm(storage, alarm, tz, admins))
-    lines.append("【已结束的 AstrHe 闹钟】")
-    lines.extend(
-        format_finished_alarm(a, tz, admins)
-        for a in await storage.alarms.finished_alarms()
-    )
+    # 已结束的只列最近几天，更早的给总数并提示翻页，避免每晚材料越积越长
+    days = C.NIGHT_FINISHED_ALARM_DAYS
+    recent = await storage.alarms.finished_since(utc_now() - days * 86400)
+    lines.append(f"【最近 {days} 天结束的 AstrHe 闹钟】")
+    lines.extend(format_finished_alarm(a, tz, admins) for a in recent)
+    older = await storage.alarms.count_alarms("finished") - len(recent)
+    if older > 0:
+        lines.append(
+            f"更早结束的还有 {older} 条，需要时用 astrhe_read_alarms(scope=finished) 翻页查看"
+        )
     return "\n".join(lines)
 
 

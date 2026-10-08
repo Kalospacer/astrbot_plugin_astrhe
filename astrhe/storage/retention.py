@@ -1,29 +1,50 @@
-"""成功提交后统一清理过程记录；日记和关系本保留，回收站满期才删除。"""
+"""每晚开跑前统一清理过期记录；日记和关系本保留，回收站满期才删除。
+
+两种截止点：
+- 过程记录（运行与汇报、草稿、审稿、小动作计数、修订、回收站）按 30 天截止；
+- 聊天账本、已结束闹钟与执行流水按「30 天」和「本次复盘起点」中更早的一个截止，
+  夜间长期失败时，还没复盘过的消息和闹钟结果不会被删。
+"""
 
 from .. import constants as C
 from ..timeutil import utc_now
 from .alarms import LIVE_ALARM_SQL
 
+#: 生效中闹钟最近一次触发及其之后的流水要保留，否则年度、月度重复闹钟
+#: 会显示成「未见执行记录」。
+_KEEP_LATEST_RUN_SQL = (
+    "EXISTS (SELECT 1 FROM alarms WHERE alarms.id=alarm_events.alarm_id"
+    f" AND {LIVE_ALARM_SQL} AND alarm_events.ts>=(SELECT MAX(e.ts) FROM alarm_events e"
+    " WHERE e.alarm_id=alarms.id AND e.kind IN ('fired','manual_run')))"
+)
+
 
 async def cleanup_history(
-    storage, cutoff, keep_run_id, *, cron_manager=None, logger=None
+    storage,
+    cutoff,
+    keep_run_id,
+    *,
+    protected_cutoff=None,
+    cron_manager=None,
+    logger=None,
 ):
+    protected = cutoff if protected_cutoff is None else min(cutoff, protected_cutoff)
     finished = await storage.db.fetchall(
         f"SELECT * FROM alarms WHERE NOT {LIVE_ALARM_SQL} "
         "AND COALESCE(finished_at, run_at, created_at)<?",
-        (cutoff,),
+        (protected,),
     )
     if cron_manager is not None and finished:
         try:
-            jobs = {j.job_id: j for j in await cron_manager.list_jobs("active_agent")}
+            jobs = {j.job_id for j in await cron_manager.list_jobs("active_agent")}
             for alarm in finished:
-                job = jobs.get(alarm["cron_job_id"])
-                if job is not None and not job.enabled:
+                # 已结束闹钟不会再用到平台任务：停用的、停机错过的残留都一并删掉。
+                if alarm["cron_job_id"] in jobs:
                     try:
-                        await cron_manager.delete_job(job.job_id)
+                        await cron_manager.delete_job(alarm["cron_job_id"])
                     except Exception as exc:
                         if logger:
-                            logger.warning(f"[AstrHe] 清理已停用闹钟任务失败：{exc}")
+                            logger.warning(f"[AstrHe] 清理残留闹钟任务失败：{exc}")
         except Exception as exc:
             if logger:
                 logger.warning(f"[AstrHe] 清理时查询平台任务失败：{exc}")
@@ -52,7 +73,7 @@ async def cleanup_history(
                 cur = await db.conn.execute(
                     f"DELETE FROM alarms WHERE id=? AND NOT {LIVE_ALARM_SQL} "
                     "AND COALESCE(finished_at, run_at, created_at)<?",
-                    (alarm["id"], cutoff),
+                    (alarm["id"], protected),
                 )
                 if cur.rowcount:
                     deleted += 1
@@ -60,7 +81,12 @@ async def cleanup_history(
                         "DELETE FROM alarm_events WHERE alarm_id=?", (alarm["id"],)
                     )
             counts["alarms"] = deleted
-            for table in ("alarm_events", "action_log", "memory_revisions"):
+            cur = await db.conn.execute(
+                f"DELETE FROM alarm_events WHERE ts<? AND NOT {_KEEP_LATEST_RUN_SQL}",
+                (protected,),
+            )
+            counts["alarm_events"] = cur.rowcount
+            for table in ("action_log", "memory_revisions"):
                 cur = await db.conn.execute(
                     f"DELETE FROM {table} WHERE ts<?", (cutoff,)
                 )
@@ -82,21 +108,19 @@ async def cleanup_history(
     return counts
 
 
-async def cleanup_after_commit(storage, context, backfiller, keep_run_id, logger):
-    """清理失败只记日志；已提交状态和外部动作不受影响。"""
-    now = utc_now()
+async def cleanup_before_night(storage, context, keep_run_id, window_start, logger):
+    """每次非演练运行开头调用，不论当晚成败；清理失败只记日志。"""
+    cutoff = utc_now() - C.LEDGER_RETENTION_SECONDS
     try:
-        if backfiller is not None:
-            await backfiller.cleanup_old(now)
-        else:
-            await storage.ledger.cleanup(now - C.LEDGER_RETENTION_SECONDS)
+        await storage.ledger.cleanup(min(cutoff, window_start))
     except Exception as exc:
         logger.warning(f"[AstrHe] 聊天账本清理失败：{exc}")
     try:
         await cleanup_history(
             storage,
-            now - C.LEDGER_RETENTION_SECONDS,
+            cutoff,
             keep_run_id,
+            protected_cutoff=window_start,
             cron_manager=getattr(context, "cron_manager", None),
             logger=logger,
         )

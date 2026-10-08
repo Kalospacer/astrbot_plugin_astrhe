@@ -13,6 +13,17 @@ from ..tools.alarm_view import night_alarm_materials, platform_tasks
 from .agent_runner import run_night_agent
 
 
+def overdue_mark(todo: dict, today) -> str:
+    """当天或截止型待办过了日期仍未了结，标出逾期天数，提醒主 agent 跟进或清理。"""
+    if todo["due_kind"] not in ("today", "deadline") or not todo["due_date"]:
+        return ""
+    try:
+        days = (today - datetime.strptime(todo["due_date"], "%Y-%m-%d").date()).days
+    except ValueError:
+        return ""
+    return f"（已逾期 {days} 天）" if days > 0 else ""
+
+
 def anniversary_days_until(anniversaries: list[dict], today: datetime) -> int | None:
     """最近的纪念日在几天内（不含今天之外超过前瞻期的返回 None）。"""
     best: int | None = None
@@ -117,6 +128,7 @@ class Planner:
         todos_text = "\n".join(
             f"#{t['id']} [{t['status']}] {t['content']}（{t['due_kind']} {t['due_date']}，"
             f"可见于 {t['visible_umos_json']}；备注：{t['note']}）"
+            + overdue_mark(t, now.date())
             for t in todos
         )
 

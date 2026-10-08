@@ -12,6 +12,8 @@ from typing import Any
 
 import aiosqlite
 
+from .. import constants as C
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -227,6 +229,8 @@ class Database:
         conn = await aiosqlite.connect(str(self.db_path))
         conn.row_factory = aiosqlite.Row
         await conn.execute("PRAGMA journal_mode=WAL")
+        # 大批量清理会把 WAL 撑大；限制检查点后保留的大小，避免长期占用磁盘
+        await conn.execute(f"PRAGMA journal_size_limit={C.SQLITE_JOURNAL_SIZE_LIMIT}")
         await conn.execute("PRAGMA foreign_keys=ON")
         await conn.executescript(SCHEMA)
         await conn.commit()

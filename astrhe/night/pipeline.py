@@ -1,4 +1,4 @@
-"""夜间流程编排：补拉 → 对账 → 汇报 → 主 agent → 审稿 → 提交或失败回退。
+"""夜间流程编排：清理 → 补拉 → 对账 → 汇报 → 主 agent → 审稿 → 提交或失败回退。
 
 自动停止条件：连续三次模型请求失败（NightAgentError）；不设任何时长、步数、数据量上限。
 人工停止：stop() / 任务被取消；提交前取消判失败，提交后外部动作照常收尾。
@@ -13,7 +13,7 @@ from typing import Any
 
 from .. import constants as C
 from ..backfill import Backfiller
-from ..storage.retention import cleanup_after_commit
+from ..storage.retention import cleanup_before_night
 from ..timeutil import local_date_str, utc_now
 from .agent_runner import NightAgentError, get_persona_prompt, retry_stats
 from .draft import CommitError, DraftCommitter
@@ -217,6 +217,13 @@ class NightPipeline:
         dry: bool,
         stats: dict[str, Any],
     ) -> dict[str, Any]:
+
+        # ⓪ 清理过期记录：不论当晚成败都做，演练不动数据
+        if not dry:
+            self._set_stage("cleanup")
+            await cleanup_before_night(
+                self.storage, self.context, run_id, window_start, self.logger
+            )
 
         # ① 补拉
         self._set_stage("backfill")
@@ -449,9 +456,6 @@ class NightPipeline:
             except Exception as exc:
                 results.append(f"好友申请收尾异常：{exc}")
         self._stats["external_results"] = results
-        await cleanup_after_commit(
-            self.storage, self.context, self.backfiller, committer.run_id, self.logger
-        )
         self._set_stage(
             "plan"
             if self._run_task is not None and not self._run_task.done()

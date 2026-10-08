@@ -48,6 +48,11 @@ def page_footer(total, offset, size):
     )
 
 
+def _when(ts, tz) -> str:
+    """旧版本迁移来的承诺没有时间（记为 0），不要显示成 1970 年。"""
+    return local_datetime_str(ts, tz) if ts else "时间未知"
+
+
 def format_entry(kind, row, tz):
     if kind == "todo":
         detail = (
@@ -60,11 +65,11 @@ def format_entry(kind, row, tz):
         detail = (
             f"{row['from_id']} → {row['to_id']}：{row['content']}"
             f"（期限 {row['due_date'] or '无'}，出处 {row['evidence_json']}，"
-            f"创建 {local_datetime_str(row['created_at'], tz)}）"
+            f"创建 {_when(row['created_at'], tz)}）"
         )
     return (
         f"[{kind}] #{row['id']} [{row['status']}] {detail}\n"
-        f"备注：{row['note'] or '无'}；更新 {local_datetime_str(row['updated_at'], tz)}"
+        f"备注：{row['note'] or '无'}；更新 {_when(row['updated_at'], tz)}"
     )
 
 

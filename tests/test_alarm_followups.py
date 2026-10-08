@@ -6,7 +6,6 @@ from datetime import datetime
 import pytest
 
 from astrhe import constants as C
-from astrhe.backfill import Backfiller
 from astrhe.platform import PlatformHelper
 from astrhe.qq.client import QQClient
 from astrhe.qq.lookup_tool import QQLookupTool
@@ -232,9 +231,7 @@ def test_friend_requests_use_the_same_thirty_day_retention(tmp_path):
             ):
                 await s.ledger.add_friend_request(user_id="40004", flag=flag, ts=ts)
             await s.ledger.set_friend_request_status("old-approved", "approved")
-            ctx = FakeContext()
-            backfill = Backfiller(s, PlatformHelper(ctx, FakeLogger()), FakeLogger())
-            await backfill.cleanup_old(now)
+            await s.ledger.cleanup(now - C.LEDGER_RETENTION_SECONDS)
             rows = await s.db.fetchall("SELECT * FROM friend_requests")
             assert {r["flag"] for r in rows} == {"boundary", "recent"}
         finally:
