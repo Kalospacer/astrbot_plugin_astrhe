@@ -14,7 +14,8 @@ REVIEWER_INSTRUCTION = """你是「夜间复盘」流程里的审稿人。主 ag
 5. 日期、时区、星期是否算对。
 6. 与已有待办、AstrHe 闹钟、外部唤醒任务是否重复。
 7. 闹钟卡片是否完整到「被叫醒时只看卡片就能办成事」。
-8. 取消已有闹钟的理由是否成立，是否已经执行过；改期是否同时取消旧闹钟，避免重复催促。
+8. 取消已有闹钟的理由是否成立，一次性任务是否已经执行过；重复任务可取消；改期是否同时取消旧闹钟，避免重复催促。撤销管理员闹钟时，是否附了管理员本人明确要求取消或改期的消息依据。
+9. 日记删改是否必要、理由是否成立、是否被聊天内容带了节奏、有没有误删重要回忆。删除会进回收站，30 天内可恢复。
 
 必须用 astrhe_read_alarms、astrhe_read_todos 查重，用 astrhe_message_context 核对 #消息id 的出处，用 astrhe_read_reports 核对会话汇报。
 
@@ -28,7 +29,10 @@ REVIEWER_INSTRUCTION = """你是「夜间复盘」流程里的审稿人。主 ag
 
 
 def build_reviewer_system(
-    persona_prompt: str, admins: list[str], focus: str, time_info: str = "",
+    persona_prompt: str,
+    admins: list[str],
+    focus: str,
+    time_info: str = "",
     self_id: str = "",
 ) -> str:
     admin_text = "、".join(admins) if admins else "（未配置）"

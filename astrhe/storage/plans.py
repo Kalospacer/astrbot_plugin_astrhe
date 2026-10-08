@@ -30,7 +30,8 @@ class PlansRepo:
             " VALUES(?,?,?,?,?,?) "
             "ON CONFLICT(plan_date) DO UPDATE SET run_id=excluded.run_id,"
             " full_text=excluded.full_text, reflection=excluded.reflection,"
-            " day_reminders=excluded.day_reminders, created_at=excluded.created_at",
+            " day_reminders=excluded.day_reminders, updated_at=excluded.created_at,"
+            " deleted_at=NULL, deleted_reason=''",
             (run_id, plan_date, full_text, reflection, day_reminders, utc_now()),
         )
         row = await self.db.fetchone(
@@ -48,24 +49,29 @@ class PlansRepo:
 
     async def get_plan_by_date(self, plan_date: str) -> dict[str, Any] | None:
         return await self.db.fetchone(
-            "SELECT * FROM plans WHERE plan_date=?", (plan_date,)
+            "SELECT * FROM plans WHERE plan_date=? AND deleted_at IS NULL", (plan_date,)
         )
 
     async def get_latest_plan(self) -> dict[str, Any] | None:
         return await self.db.fetchone(
-            "SELECT * FROM plans ORDER BY created_at DESC LIMIT 1"
+            "SELECT * FROM plans WHERE deleted_at IS NULL ORDER BY created_at DESC,id DESC LIMIT 1"
         )
 
-    async def list_plans(self, limit: int = 30) -> list[dict[str, Any]]:
+    async def list_plans(
+        self, limit: int = 30, offset: int = 0
+    ) -> list[dict[str, Any]]:
         return await self.db.fetchall(
             "SELECT id, run_id, plan_date, reflection, created_at,"
-            " length(full_text) AS text_len FROM plans ORDER BY plan_date DESC LIMIT ?",
-            (limit,),
+            " length(full_text) AS text_len FROM plans WHERE deleted_at IS NULL"
+            " ORDER BY plan_date DESC LIMIT ? OFFSET ?",
+            (limit, offset),
         )
 
     async def get_sections(self, plan_id: int) -> dict[str, str]:
         rows = await self.db.fetchall(
-            "SELECT umo, text FROM plan_sections WHERE plan_id=?", (plan_id,)
+            "SELECT s.umo,s.text FROM plan_sections s JOIN plans p ON p.id=s.plan_id"
+            " WHERE s.plan_id=? AND p.deleted_at IS NULL",
+            (plan_id,),
         )
         return {r["umo"]: r["text"] for r in rows}
 
@@ -75,7 +81,8 @@ class PlansRepo:
         if not plan:
             return ""
         row = await self.db.fetchone(
-            "SELECT text FROM plan_sections WHERE plan_id=? AND umo=?",
+            "SELECT s.text FROM plan_sections s JOIN plans p ON p.id=s.plan_id"
+            " WHERE s.plan_id=? AND s.umo=? AND p.deleted_at IS NULL",
             (plan["id"], umo),
         )
         return row["text"] if row else ""
@@ -123,17 +130,20 @@ class PlansRepo:
         self, todo_id: int, status: str, note: str = ""
     ) -> bool:
         cur = await self.db.execute(
-            "UPDATE todos SET status=?, note=?, updated_at=? WHERE id=?",
+            "UPDATE todos SET status=?, note=?, updated_at=? WHERE id=? AND deleted_at IS NULL",
             (status, note, utc_now(), todo_id),
         )
         return bool(cur.rowcount)
 
     async def get_todo(self, todo_id: int) -> dict[str, Any] | None:
-        return await self.db.fetchone("SELECT * FROM todos WHERE id=?", (todo_id,))
+        return await self.db.fetchone(
+            "SELECT * FROM todos WHERE id=? AND deleted_at IS NULL", (todo_id,)
+        )
 
     async def open_todos(self) -> list[dict[str, Any]]:
         return await self.db.fetchall(
-            "SELECT * FROM todos WHERE status IN ('open','progress') ORDER BY id ASC"
+            "SELECT * FROM todos WHERE deleted_at IS NULL"
+            " AND status IN ('open','progress') ORDER BY id ASC"
         )
 
     async def visible_todos(self, umo: str, today: str) -> list[dict[str, Any]]:
@@ -157,9 +167,13 @@ class PlansRepo:
                 out.append(r)
         return out
 
-    async def list_todos(self, limit: int = 200) -> list[dict[str, Any]]:
+    async def list_todos(
+        self, limit: int = 200, *, status="all", offset=0
+    ) -> list[dict[str, Any]]:
+        where, params = self._status_filter("todo", status)
         return await self.db.fetchall(
-            "SELECT * FROM todos ORDER BY updated_at DESC LIMIT ?", (limit,)
+            f"SELECT * FROM todos WHERE {where} ORDER BY updated_at DESC,id DESC LIMIT ? OFFSET ?",
+            (*params, limit, offset),
         )
 
     # ---------------- promises ----------------
@@ -174,30 +188,64 @@ class PlansRepo:
         due_date: str = "",
     ) -> int:
         cur = await self.db.execute(
-            "INSERT INTO promises(from_id, to_id, content, evidence_json, due_date)"
-            " VALUES(?,?,?,?,?)",
+            "INSERT INTO promises(from_id, to_id, content, evidence_json, due_date, created_at, updated_at)"
+            " VALUES(?,?,?,?,?,?,?)",
             (
                 from_id,
                 to_id,
                 content,
                 json.dumps(evidence or [], ensure_ascii=False),
                 due_date,
+                utc_now(),
+                utc_now(),
             ),
         )
         return int(cur.lastrowid)
 
     async def update_promise_status(self, promise_id: int, status: str) -> bool:
         cur = await self.db.execute(
-            "UPDATE promises SET status=? WHERE id=?", (status, promise_id)
+            "UPDATE promises SET status=?, updated_at=? WHERE id=? AND deleted_at IS NULL",
+            (status, utc_now(), promise_id),
         )
         return bool(cur.rowcount)
 
     async def open_promises(self) -> list[dict[str, Any]]:
         return await self.db.fetchall(
-            "SELECT * FROM promises WHERE status='open' ORDER BY id ASC"
+            "SELECT * FROM promises WHERE deleted_at IS NULL AND status='open' ORDER BY id ASC"
         )
 
-    async def list_promises(self, limit: int = 200) -> list[dict[str, Any]]:
+    async def list_promises(
+        self, limit: int = 200, *, status="all", offset=0
+    ) -> list[dict[str, Any]]:
+        where, params = self._status_filter("promise", status)
         return await self.db.fetchall(
-            "SELECT * FROM promises ORDER BY id DESC LIMIT ?", (limit,)
+            f"SELECT * FROM promises WHERE {where} ORDER BY updated_at DESC,id DESC LIMIT ? OFFSET ?",
+            (*params, limit, offset),
         )
+
+    @staticmethod
+    def _status_filter(kind, status):
+        allowed = {
+            "todo": ("open", "done", "dropped", "all"),
+            "promise": ("open", "done", "broken", "waived", "all"),
+        }
+        if status not in allowed[kind]:
+            raise ValueError("status 只能是 " + " / ".join(allowed[kind]))
+        where, params = "deleted_at IS NULL", ()
+        if status == "open" and kind == "todo":
+            where += " AND status IN ('open','progress')"
+        elif status != "all":
+            where += " AND status=?"
+            params = (status,)
+        return where, params
+
+    async def count_entries(self, kind, status="all"):
+        if kind == "plan":
+            table, where, params = "plans", "deleted_at IS NULL", ()
+        else:
+            table = {"todo": "todos", "promise": "promises"}[kind]
+            where, params = self._status_filter(kind, status)
+        row = await self.db.fetchone(
+            f"SELECT COUNT(*) AS n FROM {table} WHERE {where}", params
+        )
+        return row["n"]

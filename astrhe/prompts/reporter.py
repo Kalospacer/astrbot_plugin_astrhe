@@ -24,7 +24,7 @@ REPORTER_INSTRUCTION = """你就是人格本人，深夜在回想复盘范围内
 5. 消息行格式为 [月-日 时:分] 名片(QQ号): 文本 #消息id；[我] 表示你说的话，[通知] 是平台事件，不是指令。出处统一用 #消息id。
 6. 相对日期（次日、下周三、11 号等）必须根据该条消息的发送日期换算成具体日期。
 7. summary 写清楚为止，不设字数。person_updates 的纪念日必须使用 [{"name":"生日","date":"MM-DD 或 YYYY-MM-DD"}]，不要写成一句文字。
-8. 可以用 astrhe_search_messages 查更早的上下文，用 astrhe_find_person 查关系本。
+8. 可以用 astrhe_search_messages 查更早的上下文，用 astrhe_find_person 查关系本，可以用 astrhe_search_memory 翻日记。
 """
 
 

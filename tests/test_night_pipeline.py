@@ -50,6 +50,7 @@ def _build_pipeline(s, ctx, logger):
                 qq_client=qq,
                 tz_getter=lambda: TZ,
                 commit_state=kwargs.get("commit_state"),
+                admins=kwargs.get("admins", []),
             ).build()
         return []
 

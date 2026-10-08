@@ -20,6 +20,7 @@ from ..tools.validation import (
     validate_alarm_cancel,
     validate_night_alarm_frequency,
 )
+from .memory_apply import apply_memory_edit
 
 
 class CommitError(Exception):
@@ -36,6 +37,7 @@ class DraftCommitter:
         tz: Any,
         rate_limiter: Any = None,
         qq_client: Any = None,
+        admins=None,
     ):
         self.storage = storage
         self.context = context
@@ -44,6 +46,9 @@ class DraftCommitter:
         self.tz = tz
         self.rate_limiter = rate_limiter
         self.qq = qq_client
+        self.admins = (
+            admins if admins is not None else context.get_config().get("admins_id", [])
+        )
 
     async def validate(self) -> None:
         """提交前校验；不通过抛 CommitError。"""
@@ -75,7 +80,7 @@ class DraftCommitter:
                 "payload_json": json.dumps({"sections": sections}, ensure_ascii=False),
             }
         ]
-        for kind in ("todo", "todo_drop", "person", "promise"):
+        for kind in ("todo", "todo_drop", "person", "promise", "memory_edit"):
             ordered.extend(d for d in drafts if d["kind"] == kind)
         stats: dict[str, Any] = {
             "plan": 0,
@@ -84,6 +89,7 @@ class DraftCommitter:
             "todo_drops": 0,
             "persons": 0,
             "promises": 0,
+            "memory_edits": 0,
         }
         db = self.storage.db
         now = utc_now()
@@ -102,7 +108,8 @@ class DraftCommitter:
                             " day_reminders, created_at) VALUES(?,?,?,?,?,?) "
                             "ON CONFLICT(plan_date) DO UPDATE SET run_id=excluded.run_id,"
                             " full_text=excluded.full_text, reflection=excluded.reflection,"
-                            " day_reminders=excluded.day_reminders, created_at=excluded.created_at",
+                            " day_reminders=excluded.day_reminders, updated_at=excluded.created_at,"
+                            " deleted_at=NULL, deleted_reason=''",
                             (
                                 self.run_id,
                                 self.plan_date,
@@ -159,7 +166,7 @@ class DraftCommitter:
                     elif kind == "todo_drop":
                         await db.conn.execute(
                             "UPDATE todos SET status='dropped', note=?, updated_at=?"
-                            " WHERE id=?",
+                            " WHERE id=? AND deleted_at IS NULL",
                             (
                                 f"夜间删除：{payload.get('reason', '')}",
                                 now,
@@ -171,8 +178,13 @@ class DraftCommitter:
                         await self._apply_person(db, payload, now)
                         stats["persons"] += 1
                     elif kind == "promise":
-                        await self._apply_promise(db, payload)
+                        await self._apply_promise(db, payload, now)
                         stats["promises"] += 1
+                    elif kind == "memory_edit":
+                        await apply_memory_edit(
+                            self.storage, payload, self.plan_date, self.run_id, now
+                        )
+                        stats["memory_edits"] += 1
                 await db.conn.execute(
                     "UPDATE drafts SET applied=1, status='applied' WHERE run_id=? AND status='active'",
                     (self.run_id,),
@@ -235,24 +247,33 @@ class DraftCommitter:
                 (until, payload.get("expected_reason", ""), qq),
             )
 
-    async def _apply_promise(self, db: Any, payload: dict) -> None:
+    async def _apply_promise(self, db: Any, payload: dict, now: float) -> None:
         if payload.get("action") == "add":
             await db.conn.execute(
-                "INSERT INTO promises(from_id, to_id, content, due_date)"
-                " VALUES(?,?,?,?)",
+                "INSERT INTO promises(from_id, to_id, content, due_date, created_at, updated_at)"
+                " VALUES(?,?,?,?,?,?)",
                 (
                     payload.get("from_id", ""),
                     payload.get("to_id", ""),
                     payload.get("content", ""),
                     payload.get("due_date", ""),
+                    now,
+                    now,
                 ),
             )
         elif payload.get("action") == "update":
             status = payload.get("status", "")
             if status in ("done", "broken", "waived"):
                 await db.conn.execute(
-                    "UPDATE promises SET status=? WHERE id=?",
-                    (status, int(payload.get("promise_id", 0))),
+                    "UPDATE promises SET status=?, updated_at=?,"
+                    " note=CASE WHEN ?='' THEN note ELSE ? END WHERE id=? AND deleted_at IS NULL",
+                    (
+                        status,
+                        now,
+                        payload.get("reason", ""),
+                        payload.get("reason", ""),
+                        int(payload.get("promise_id", 0)),
+                    ),
                 )
 
     async def run_external_actions(self) -> list[str]:
@@ -281,7 +302,12 @@ class DraftCommitter:
     async def _cancel_alarm(self, payload: dict) -> str:
         alarm_id = int(payload["alarm_id"])
         try:
-            alarm = await validate_alarm_cancel(self.storage, alarm_id)
+            alarm = await validate_alarm_cancel(
+                self.storage,
+                alarm_id,
+                admins=self.admins,
+                evidence_message_id=payload.get("evidence_message_id", ""),
+            )
             await self.context.cron_manager.delete_job(alarm["cron_job_id"])
         except Exception as exc:
             return f"取消闹钟 #{alarm_id} 失败，保留原状态：{exc}"

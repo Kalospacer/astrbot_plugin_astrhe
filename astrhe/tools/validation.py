@@ -179,17 +179,39 @@ async def validate_night_alarm_frequency(
         raise ValueError("同一目标每天的主动闹钟达到频率上限")
 
 
-async def validate_alarm_cancel(storage, alarm_id: int) -> dict:
-    """取消草稿与实际执行共用：只允许撤销尚未执行的 AstrHe 闹钟。"""
+async def validate_alarm_cancel(
+    storage, alarm_id: int, *, admins=(), evidence_message_id: str = ""
+) -> dict:
+    """草稿与执行共用：重复任务可撤销，管理员安排必须有有效依据。"""
     alarm = await storage.alarms.get_alarm(alarm_id)
     if alarm is None:
         raise ValueError(f"找不到闹钟 #{alarm_id}")
     events = await storage.alarms.events(alarm_id)
-    if alarm["status"] != "scheduled" or any(
-        e["kind"] in ("fired", "manual_run", "send_ok", "send_failed", "done")
-        for e in events
-    ):
+    if alarm["cron_expression"]:
+        executed = alarm["status"] == "cancelled"
+    else:
+        executed = alarm["status"] != "scheduled" or any(
+            e["kind"] in ("fired", "manual_run", "send_ok", "send_failed", "done")
+            for e in events
+        )
+    if executed:
         raise ValueError(f"闹钟 #{alarm_id} 已执行或不再等待执行，不能取消")
     if not alarm["cron_job_id"]:
         raise ValueError(f"闹钟 #{alarm_id} 没有关联的定时任务")
+    admin_ids = {str(x) for x in admins if str(x).isdigit()}
+    if alarm["creator_id"] in admin_ids:
+        mid = str(evidence_message_id).strip().lstrip("#")
+        if not mid:
+            raise ValueError(
+                "管理员安排的闹钟需要管理员本人取消或改期消息的 evidence_message_id"
+            )
+        message = await storage.ledger.get_message_by_platform_id(mid)
+        if message is None:
+            raise ValueError("账本里找不到取消依据消息")
+        if message["recalled"]:
+            raise ValueError("取消依据消息已经撤回")
+        if message["sender_id"] not in admin_ids:
+            raise ValueError("取消依据必须是管理员本人发出的消息，群友的话不算")
+        if message["ts"] <= alarm["created_at"]:
+            raise ValueError("取消依据消息必须晚于闹钟创建时间")
     return alarm

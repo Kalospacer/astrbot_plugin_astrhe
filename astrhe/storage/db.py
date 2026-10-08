@@ -193,6 +193,20 @@ CREATE TABLE IF NOT EXISTS action_log (
 );
 CREATE INDEX IF NOT EXISTS idx_action_log ON action_log(action, target, ts);
 
+CREATE TABLE IF NOT EXISTS memory_revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    target_id INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    before_json TEXT NOT NULL,
+    after_json TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    run_id INTEGER,
+    ts REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_revisions_target
+    ON memory_revisions(kind, target_id, ts);
+
 CREATE TABLE IF NOT EXISTS kv_state (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL DEFAULT ''
@@ -219,6 +233,16 @@ class Database:
         self._conn = conn
         await self.ensure_column("drafts", "status", "TEXT NOT NULL DEFAULT 'active'")
         await self.ensure_column("plans", "day_reminders", "TEXT NOT NULL DEFAULT ''")
+        for table in ("plans", "todos", "promises"):
+            await self.ensure_column(table, "deleted_at", "REAL")
+            await self.ensure_column(
+                table, "deleted_reason", "TEXT NOT NULL DEFAULT ''"
+            )
+        await self.ensure_column("plans", "updated_at", "REAL")
+        await self.ensure_column("alarms", "finished_at", "REAL")
+        await self.ensure_column("promises", "created_at", "REAL NOT NULL DEFAULT 0")
+        await self.ensure_column("promises", "updated_at", "REAL NOT NULL DEFAULT 0")
+        await self.ensure_column("promises", "note", "TEXT NOT NULL DEFAULT ''")
         await conn.execute(
             "UPDATE drafts SET status='applied' WHERE applied=1 AND status='active'"
         )

@@ -9,7 +9,7 @@ from typing import Any
 from .. import constants as C
 from ..prompts import planner as planner_prompts
 from ..timeutil import utc_now
-from ..tools.alarm_view import format_night_alarm
+from ..tools.alarm_view import night_alarm_materials, platform_tasks
 from .agent_runner import run_night_agent
 
 
@@ -121,7 +121,8 @@ class Planner:
         )
 
         completed = await self.storage.db.fetchall(
-            "SELECT * FROM todos WHERE status IN ('done','dropped') AND updated_at>=? AND updated_at<?",
+            "SELECT * FROM todos WHERE deleted_at IS NULL "
+            "AND status IN ('done','dropped') AND updated_at>=? AND updated_at<?",
             self.window,
         )
         todos_text += "\n【窗口内完成或放弃的待办】\n" + "\n".join(
@@ -145,24 +146,8 @@ class Planner:
         latest_plan = await self.storage.plans.get_latest_plan()
         yesterday_plan = latest_plan["full_text"] if latest_plan else ""
 
-        alarms = await self.storage.alarms.list_alarms(-1)
-        cron_text = "\n\n".join(format_night_alarm(a, tz) for a in alarms)
-        cron = getattr(self.context, "cron_manager", None)
-        if cron is not None:
-            try:
-                jobs = await cron.list_jobs("active_agent")
-                astrhe_ids = {a["cron_job_id"] for a in alarms if a["cron_job_id"]}
-                lines = []
-                for j in jobs:
-                    payload = j.payload or {}
-                    tag = "AstrHe" if j.job_id in astrhe_ids else "外部"
-                    lines.append(
-                        f"[{tag}] {j.job_id}「{j.name}」→ {payload.get('session', '')} "
-                        f"enabled={j.enabled} run_once={j.run_once}"
-                    )
-                cron_text += "\n【平台当前任务】\n" + "\n".join(lines)
-            except Exception:  # noqa: BLE001
-                cron_text += "\n（读取平台当前唤醒任务失败）"
+        cron_text = await night_alarm_materials(self.storage, tz, self.admins)
+        cron_text += "\n" + await platform_tasks(self.storage, self.context)
 
         last_run_note = (
             "上一次运行失败了，今天沿用上一份计划" if last_run_failed else ""

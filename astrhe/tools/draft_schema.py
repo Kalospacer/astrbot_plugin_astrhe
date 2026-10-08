@@ -1,6 +1,7 @@
 """夜间草稿工具的参数声明。"""
 
 from .base import AstrHeFunctionTool
+from .memory_tools import build_memory_tool
 
 
 def build_draft_tools(owner):
@@ -105,7 +106,9 @@ def build_draft_tools(owner):
         AstrHeFunctionTool(
             name="astrhe_draft_alarm_cancel",
             description=(
-                "取消尚未执行的 AstrHe 闹钟，参数：alarm_id（AstrHe 编号）、reason（理由）。"
+                "取消尚未执行的一次性或仍在重复的 AstrHe 闹钟。"
+                "参数：alarm_id、reason；管理员安排必须给 evidence_message_id，"
+                "指向管理员本人明确要求取消或改期的消息 #id。"
                 "这里只写草稿，提交后才取消；改期或改内容请先写取消草稿，再新建闹钟草稿。"
             ),
             parameters={
@@ -113,6 +116,7 @@ def build_draft_tools(owner):
                 "properties": {
                     "alarm_id": {"type": "integer"},
                     "reason": {"type": "string"},
+                    "evidence_message_id": {"type": "string"},
                 },
                 "required": ["alarm_id", "reason"],
             },
@@ -228,6 +232,7 @@ def build_draft_tools(owner):
             fn=owner._discard,
         ),
     )
+    tools.append(build_memory_tool(owner))
     for tool in tools:
         if (
             tool.name.startswith("astrhe_draft_")

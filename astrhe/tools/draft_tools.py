@@ -35,6 +35,7 @@ class DraftTools:
         qq_client=None,
         tz_getter=None,
         commit_state=None,
+        admins=(),
     ):
         self.storage = storage
         self.run_id = run_id
@@ -44,6 +45,7 @@ class DraftTools:
         self.qq = qq_client
         self._tz_getter = tz_getter
         self.commit_state = commit_state if commit_state is not None else {}
+        self.admins = admins
 
     def guard(self, fn, name):
         async def guarded(event, **kw):
@@ -263,10 +265,19 @@ class DraftTools:
     ) -> str:
         if not reason.strip():
             return "取消闹钟必须写理由"
-        await validate_alarm_cancel(self.storage, int(alarm_id))
+        evidence = str(kw.get("evidence_message_id", "") or "").strip().lstrip("#")
+        await validate_alarm_cancel(
+            self.storage,
+            int(alarm_id),
+            admins=self.admins,
+            evidence_message_id=evidence,
+        )
+        payload = {"alarm_id": int(alarm_id), "reason": reason.strip()}
+        if evidence:
+            payload["evidence_message_id"] = evidence
         return await self._add(
             "alarm_cancel",
-            {"alarm_id": int(alarm_id), "reason": reason.strip()},
+            payload,
             kw.get("replace_draft_id", 0),
         )
 

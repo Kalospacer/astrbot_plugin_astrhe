@@ -236,6 +236,7 @@ def test_reporter_json_repair_uses_real_streaming_history_and_tool_result(tmp_pa
                         for m in kwargs.get("contexts", [])
                     ]
                     assert any(m["role"] == "tool" for m in history)
+                    assert kwargs["func_tool"].get_tool("echo_tool") is not None
                     assert "echo: 夜间你好" in str(history)
                     assert "先输出了散文" in str(history)
                     assert FIX_JSON_PROMPT in str(history) + str(kwargs.get("prompt"))

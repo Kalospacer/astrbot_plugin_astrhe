@@ -32,7 +32,7 @@ REPORT_JSON_KEYS = (
 
 FIX_JSON_PROMPT = (
     "你的输出不是合法 JSON。请只输出一个 JSON 对象，不要包 markdown 代码块，"
-    "包含这些键：" + "、".join(REPORT_JSON_KEYS)
+    "不要再调用工具，直接输出合法 JSON。包含这些键：" + "、".join(REPORT_JSON_KEYS)
 )
 
 
@@ -164,7 +164,9 @@ class Reporter:
             umo, system, header + "\n".join(lines), self.internal_tools
         )
 
-    async def _json_response(self, umo: str, system: str, prompt: str, tools: list) -> str:
+    async def _json_response(
+        self, umo: str, system: str, prompt: str, tools: list
+    ) -> str:
         """保留首次上下文；仅在解析失败时追问一次格式，不重读原始材料。"""
         text, contexts = await run_night_agent(
             self.context,
@@ -182,7 +184,7 @@ class Reporter:
             provider_id=self.provider_id,
             system_prompt=system,
             prompt=FIX_JSON_PROMPT,
-            tools=[],
+            tools=tools,
             contexts=contexts,
         )
         return text2 or text

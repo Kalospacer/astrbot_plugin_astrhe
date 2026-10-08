@@ -9,14 +9,15 @@ from __future__ import annotations
 
 import asyncio
 import time
-import json
 from typing import Any
 
 from .. import constants as C
 from ..backfill import Backfiller
+from ..storage.retention import cleanup_after_commit
 from ..timeutil import local_date_str, utc_now
 from .agent_runner import NightAgentError, get_persona_prompt, retry_stats
 from .draft import CommitError, DraftCommitter
+from .draft_preview import describe_dry_actions
 from .planner import Planner
 from .reporter import Reporter
 from .reviewer import Reviewer
@@ -304,6 +305,7 @@ class NightPipeline:
             tz,
             self.rate_limiter,
             self.qq,
+            admins=admins,
         )
         last_run = await self.storage.runs.previous_run(run_id)
         last_failed = bool(
@@ -313,6 +315,7 @@ class NightPipeline:
         draft_tools = self._internal_tools_provider(
             "draft",
             run_id=run_id,
+            admins=admins,
             commit_state=self._commit_state,
             request_review_cb=lambda focus: self._on_review(reviewer, run_id, focus),
             commit_cb=lambda summary: self._on_commit(committer, summary, dry),
@@ -339,9 +342,6 @@ class NightPipeline:
 
         # 提交工具已经执行并返回外部动作结果，此处只收尾运行记录。
         self._set_stage("finished")
-        if not dry and self.backfiller is not None:
-            await self.backfiller.cleanup_old(utc_now())
-
         final_status = "dry_done" if dry else "committed"
         await self.storage.runs.finish_run(run_id, final_status, stats=stats)
         self.logger.info(
@@ -415,14 +415,7 @@ class NightPipeline:
         if dry:
             drafts = await self.storage.runs.get_drafts(committer.run_id)
             self._commit_state["committed"] = True
-            actions = [
-                {"kind": d["kind"], **json.loads(d["payload_json"])}
-                for d in sorted(drafts, key=lambda d: d["kind"] != "alarm_cancel")
-                if d["kind"] in ("alarm", "alarm_cancel", "appearance", "person")
-            ]
-            return "演练通过，不写入正式数据。将执行：" + json.dumps(
-                actions, ensure_ascii=False
-            )
+            return describe_dry_actions(drafts)
         self._committer = committer
         self._set_stage("commit")
         try:
@@ -456,6 +449,9 @@ class NightPipeline:
             except Exception as exc:
                 results.append(f"好友申请收尾异常：{exc}")
         self._stats["external_results"] = results
+        await cleanup_after_commit(
+            self.storage, self.context, self.backfiller, committer.run_id, self.logger
+        )
         self._set_stage(
             "plan"
             if self._run_task is not None and not self._run_task.done()

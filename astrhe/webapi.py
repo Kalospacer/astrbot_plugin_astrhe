@@ -11,6 +11,7 @@ from typing import Any
 
 from .tools.validation import validate_anniversaries
 from .timeutil import local_datetime_str, utc_now
+from .memory_webapi import MemoryWebApi
 
 try:
     from astrbot.api import web as astrbot_web
@@ -26,6 +27,7 @@ class WebApi:
         self.context = context
         self._tz_getter = tz_getter
         self._runtime_status = runtime_status  # () -> dict 运行中状态
+        self.memory_api = MemoryWebApi(storage, lambda: astrbot_web, self._json_body)
 
     def register(self) -> None:
         if astrbot_web is None:
@@ -47,7 +49,7 @@ class WebApi:
             ("/person/save", self._person_save, ["POST"], "编辑关系本关系层与纪念日"),
             ("/promise/delete", self._promise_delete, ["POST"], "删除承诺"),
         ]
-        for path, handler, methods, desc in routes:
+        for path, handler, methods, desc in routes + self.memory_api.routes():
             try:
                 register(f"{ROUTE_BASE}{path}", handler, methods, desc)
             except Exception:  # noqa: BLE001

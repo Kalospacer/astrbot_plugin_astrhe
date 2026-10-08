@@ -8,6 +8,16 @@ from typing import Any
 from .db import Database
 from ..timeutil import utc_now
 
+LIVE_ALARM_SQL = (
+    "(status IN ('scheduled','fired') OR (cron_expression!='' AND status!='cancelled'))"
+)
+
+
+def is_live_alarm(alarm: dict) -> bool:
+    return alarm["status"] in ("scheduled", "fired") or bool(
+        alarm["cron_expression"] and alarm["status"] != "cancelled"
+    )
+
 
 class AlarmsRepo:
     def __init__(self, db: Database):
@@ -57,17 +67,19 @@ class AlarmsRepo:
         self, alarm_id: int, status: str, result_note: str | None = None
     ) -> None:
         await self.db.execute(
-            "UPDATE alarms SET status=?, result_note=COALESCE(?, result_note) WHERE id=?",
-            (status, result_note, alarm_id),
+            "UPDATE alarms SET status=?, result_note=COALESCE(?, result_note),"
+            " finished_at=CASE WHEN ?='cancelled' OR "
+            "(cron_expression='' AND ? IN ('done','failed','missing')) "
+            "THEN COALESCE(finished_at, ?) ELSE NULL END WHERE id=?",
+            (status, result_note, status, status, utc_now(), alarm_id),
         )
 
     async def set_status_by_job(
         self, cron_job_id: str, status: str, result_note: str | None = None
     ) -> None:
-        await self.db.execute(
-            "UPDATE alarms SET status=?, result_note=COALESCE(?, result_note) WHERE cron_job_id=?",
-            (status, result_note, cron_job_id),
-        )
+        alarm = await self.get_by_job(cron_job_id)
+        if alarm:
+            await self.set_status(alarm["id"], status, result_note)
 
     async def get_alarm(self, alarm_id: int) -> dict[str, Any] | None:
         return await self.db.fetchone("SELECT * FROM alarms WHERE id=?", (alarm_id,))
@@ -96,6 +108,28 @@ class AlarmsRepo:
         return await self.db.fetchall(
             "SELECT * FROM alarms ORDER BY id DESC LIMIT ?", (limit,)
         )
+
+    async def live_alarms(self) -> list[dict[str, Any]]:
+        """夜间展示与撤销用；重复任务上一次失败不代表停止重复。"""
+        return await self.db.fetchall(
+            f"SELECT * FROM alarms WHERE {LIVE_ALARM_SQL} ORDER BY id"
+        )
+
+    async def finished_alarms(self, limit: int = -1, offset: int = 0) -> list[dict]:
+        return await self.db.fetchall(
+            f"SELECT * FROM alarms WHERE NOT {LIVE_ALARM_SQL}"
+            " ORDER BY id DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        )
+
+    async def count_alarms(self, scope: str) -> int:
+        where = {
+            "active": f"WHERE {LIVE_ALARM_SQL}",
+            "finished": f"WHERE NOT {LIVE_ALARM_SQL}",
+            "all": "",
+        }[scope]
+        row = await self.db.fetchone(f"SELECT COUNT(*) AS n FROM alarms {where}")
+        return row["n"]
 
     async def count_created_since(
         self,

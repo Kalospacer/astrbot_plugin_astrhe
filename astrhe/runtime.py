@@ -23,6 +23,7 @@ from .tools.base import AstrHeFunctionTool
 from .tools.day_tools import DayTools
 from .tools.draft_tools import DraftTools
 from .tools.reader_tools import ReaderTools
+from .tools.memory_readers import PLAN_READ_PARAMETERS
 from .tools.schedule_tool import ScheduleToolImpl
 from .tools.secrecy import PresentResolver
 from .webapi import WebApi
@@ -208,12 +209,9 @@ class AstrHeRuntime:
                     name="astrhe_read_plan",
                     description=(
                         "读规划书全文。参数：date（可选，YYYY-MM-DD，默认最近一份）。"
-                        "对别人保密的内容会被遮挡。"
+                        "list=true 列日期，每页 60 份，offset 翻页。对别人保密的内容会被遮挡。"
                     ),
-                    parameters={
-                        "type": "object",
-                        "properties": {"date": {"type": "string"}},
-                    },
+                    parameters=PLAN_READ_PARAMETERS,
                     fn=self.reader_tools._read_plan,
                 ),
                 AstrHeFunctionTool(
@@ -281,6 +279,7 @@ class AstrHeRuntime:
                 qq_client=self.qq,
                 tz_getter=self.tz,
                 commit_state=kwargs.get("commit_state"),
+                admins=kwargs.get("admins", self.admins()),
             ).build()
         return []
 

@@ -7,6 +7,7 @@ from pathlib import Path
 from .alarms import AlarmsRepo
 from .db import Database
 from .ledger import LedgerRepo
+from .memory import MemoryRepo
 from .persons import PersonsRepo
 from .plans import PlansRepo
 from .runs import RunsRepo
@@ -22,6 +23,7 @@ class Storage:
         self.plans = PlansRepo(self.db)
         self.alarms = AlarmsRepo(self.db)
         self.persons = PersonsRepo(self.db)
+        self.memory = MemoryRepo(self.db)
 
     async def open(self) -> None:
         await self.db.open()

@@ -11,8 +11,15 @@ from typing import Any
 from .. import constants as C
 from ..platform import parse_umo, event_umo
 from .base import AstrHeFunctionTool
-from .alarm_view import format_night_alarm
+from .alarm_view import read_alarms
 from .secrecy import filter_secret_text
+from .memory_readers import (
+    PLAN_READ_PARAMETERS,
+    build_memory_readers,
+    page_footer,
+    read_items,
+    search_memory,
+)
 
 
 def format_message_line(row: dict, tz) -> str:
@@ -48,7 +55,7 @@ class ReaderTools:
         return self._tz_getter()
 
     def build(self) -> list[AstrHeFunctionTool]:
-        return [
+        return build_memory_readers(self) + [
             AstrHeFunctionTool(
                 name="astrhe_read_reports",
                 description="完整读取今晚各会话汇报，审稿核对用。",
@@ -118,36 +125,64 @@ class ReaderTools:
             ),
             AstrHeFunctionTool(
                 name="astrhe_read_todos",
-                description="读待办列表。参数：include_done（可选，true 时包含已完成）。",
+                description="读完整待办含备注与日期。status=open（默认，含 progress）/done/dropped/all；每页 100 条，offset 翻页。",
                 parameters={
                     "type": "object",
-                    "properties": {"include_done": {"type": "boolean"}},
+                    "properties": {
+                        "status": {
+                            "type": "string",
+                            "enum": ["open", "done", "dropped", "all"],
+                        },
+                        "offset": {"type": "integer"},
+                        "include_done": {
+                            "type": "boolean",
+                            "description": "兼容旧调用；true 等同 status=all",
+                        },
+                    },
                 },
                 fn=self._read_todos,
             ),
             AstrHeFunctionTool(
                 name="astrhe_read_promises",
-                description="读承诺账本：谁答应了谁什么、兑现状态。",
+                description="读承诺含备注与日期。status=open/done/broken/waived/all（默认）；每页 100 条，offset 翻页。",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "status": {
+                            "type": "string",
+                            "enum": ["open", "done", "broken", "waived", "all"],
+                        },
+                        "offset": {"type": "integer"},
+                    },
+                },
                 fn=self._read_promises,
             ),
             AstrHeFunctionTool(
                 name="astrhe_read_alarms",
                 description=(
-                    "读闹钟状态：AstrHe 建的闹钟（含时间、目的、背景与完整卡片）+ 全部唤醒任务清单"
-                    "（含其他方式建的，用于查重）。"
+                    "读闹钟；scope=active（默认）/finished/all；alarm_id 读单条完整卡片"
+                    "及全部事件；已结束列表每页 50 条，用 offset 翻页。附平台任务清单供查重。"
                 ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "scope": {
+                            "type": "string",
+                            "enum": ["active", "finished", "all"],
+                        },
+                        "alarm_id": {"type": "integer"},
+                        "offset": {"type": "integer"},
+                    },
+                },
                 fn=self._read_alarms,
             ),
             AstrHeFunctionTool(
                 name="astrhe_read_plan",
                 description=(
                     "读规划书全文。参数：date（可选，YYYY-MM-DD，默认最近一份）。"
-                    "对别人保密的内容可能被遮挡。"
+                    "list=true 列出已有日期，每页 60 条，offset 翻页。对别人保密的内容可能被遮挡。"
                 ),
-                parameters={
-                    "type": "object",
-                    "properties": {"date": {"type": "string"}},
-                },
+                parameters=PLAN_READ_PARAMETERS,
                 fn=self._read_plan,
             ),
         ]
@@ -240,59 +275,52 @@ class ReaderTools:
         )
 
     async def _read_todos(self, event: Any, **kwargs: Any) -> str:
-        include_done = bool(kwargs.get("include_done"))
-        rows = await self.storage.plans.open_todos()
-        if include_done:
-            rows = await self.storage.plans.list_todos(-1)
-        if not rows:
-            return "没有待办"
-        lines = []
-        for r in rows:
-            lines.append(
-                f"#{r['id']} [{r['status']}] {r['content']}"
-                f"（{r['due_kind']} {r['due_date']}，可见于 {r['visible_umos_json']}；备注：{r['note']}）"
-            )
-        return "待办列表：\n" + "\n".join(lines)
+        status = kwargs.get("status", "all" if kwargs.get("include_done") else "open")
+        return await read_items(
+            self.storage,
+            "todo",
+            self._tz(),
+            status=status,
+            offset=kwargs.get("offset", 0),
+        )
 
     async def _read_promises(self, event: Any, **kwargs: Any) -> str:
-        rows = await self.storage.plans.list_promises(-1)
-        if not rows:
-            return "承诺账本是空的"
-        lines = [
-            f"#{r['id']} [{r['status']}] {r['from_id']} → {r['to_id']}：{r['content']}"
-            f"（期限 {r['due_date'] or '无'}）"
-            for r in rows
-        ]
-        return "承诺账本：\n" + "\n".join(lines)
+        return await read_items(
+            self.storage,
+            "promise",
+            self._tz(),
+            status=kwargs.get("status", "all"),
+            offset=kwargs.get("offset", 0),
+        )
+
+    async def _search_memory(
+        self, event: Any, keyword="", kind="all", offset=0, **kwargs
+    ):
+        return await search_memory(self.storage, keyword, kind, offset, self._tz())
 
     async def _read_alarms(self, event: Any, **kwargs: Any) -> str:
-        alarms = await self.storage.alarms.list_alarms(-1)
-        lines = []
-        if alarms:
-            lines.append("AstrHe 建的闹钟：")
-            for a in alarms:
-                lines.append(format_night_alarm(a, self._tz()))
-        # 全部唤醒任务（含外部建的），用于查重
-        cron = getattr(self.context, "cron_manager", None)
-        if cron is not None:
-            try:
-                jobs = await cron.list_jobs("active_agent")
-            except Exception as exc:  # noqa: BLE001
-                jobs = []
-                lines.append(f"读取全部唤醒任务失败: {exc}")
-            astrhe_job_ids = {a["cron_job_id"] for a in alarms if a["cron_job_id"]}
-            if jobs:
-                lines.append("全部唤醒任务（含外部）：")
-                for j in jobs:
-                    payload = j.payload or {}
-                    tag = "AstrHe" if j.job_id in astrhe_job_ids else "外部"
-                    lines.append(
-                        f"[{tag}] {j.job_id}「{j.name}」→ {payload.get('session', '')}"
-                        f" enabled={j.enabled}"
-                    )
-        return "\n".join(lines) if lines else "现在没有任何闹钟"
+        admins = self.context.get_config().get("admins_id", [])
+        admins = [str(x) for x in admins if str(x).isdigit()]
+        return await read_alarms(
+            self.storage,
+            self.context,
+            self._tz(),
+            admins,
+            scope=kwargs.get("scope", "active"),
+            alarm_id=kwargs.get("alarm_id", 0),
+            offset=kwargs.get("offset", 0),
+        )
 
     async def _read_plan(self, event: Any, date: str = "", **kwargs: Any) -> str:
+        if kwargs.get("list"):
+            offset = max(0, int(kwargs.get("offset", 0)))
+            total = await self.storage.plans.count_entries("plan")
+            rows = await self.storage.plans.list_plans(C.MEMORY_PLAN_PAGE_SIZE, offset)
+            return (
+                f"规划书日期（共 {total} 份，本页 {len(rows)} 份）：\n"
+                + "\n".join(r["plan_date"] for r in rows)
+                + page_footer(total, offset, len(rows))
+            )
         if date:
             plan = await self.storage.plans.get_plan_by_date(date)
         else:
@@ -308,7 +336,7 @@ class ReaderTools:
             umo = event_umo(event)
         except Exception:  # noqa: BLE001
             pass
-        if umo and self.secrecy_resolver is not None:
+        if self.run_id is None and umo and self.secrecy_resolver is not None:
             present = await self.secrecy_resolver.present_ids(umo)
             text = filter_secret_text(
                 text, viewer_id=viewer_id, session_umo=umo, present_ids=present
