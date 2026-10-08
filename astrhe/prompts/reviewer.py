@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .common import persona_system
+from .common import persona_system, self_identity
 
 REVIEWER_INSTRUCTION = """你是「夜间复盘」流程里的审稿人。主 agent 刚写好了规划日的规划草稿，你的任务是挑毛病、找风险，帮它把计划改得更稳。
 
@@ -14,6 +14,7 @@ REVIEWER_INSTRUCTION = """你是「夜间复盘」流程里的审稿人。主 ag
 5. 日期、时区、星期是否算对。
 6. 与已有待办、AstrHe 闹钟、外部唤醒任务是否重复。
 7. 闹钟卡片是否完整到「被叫醒时只看卡片就能办成事」。
+8. 取消已有闹钟的理由是否成立，是否已经执行过；改期是否同时取消旧闹钟，避免重复催促。
 
 必须用 astrhe_read_alarms、astrhe_read_todos 查重，用 astrhe_message_context 核对 #消息id 的出处，用 astrhe_read_reports 核对会话汇报。
 
@@ -27,10 +28,11 @@ REVIEWER_INSTRUCTION = """你是「夜间复盘」流程里的审稿人。主 ag
 
 
 def build_reviewer_system(
-    persona_prompt: str, admins: list[str], focus: str, time_info: str = ""
+    persona_prompt: str, admins: list[str], focus: str, time_info: str = "",
+    self_id: str = "",
 ) -> str:
     admin_text = "、".join(admins) if admins else "（未配置）"
-    parts = [persona_system(persona_prompt)]
+    parts = [persona_system(persona_prompt), self_identity(self_id)]
     parts.append(
         REVIEWER_INSTRUCTION.format(
             admins=admin_text, focus=focus or "全面审查", time_info=time_info

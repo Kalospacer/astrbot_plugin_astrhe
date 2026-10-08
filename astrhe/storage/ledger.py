@@ -205,11 +205,14 @@ class LedgerRepo:
         return row["m"] if row and row["m"] is not None else None
 
     async def cleanup(self, older_than_ts: float) -> tuple[int, int]:
-        """清理超过保留期的 messages 与 notices，返回删除条数。"""
+        """清理超过保留期的消息、通知和好友申请，返回消息与通知删除条数。"""
         cur1 = await self.db.execute(
             "DELETE FROM messages WHERE ts<?", (older_than_ts,)
         )
         cur2 = await self.db.execute("DELETE FROM notices WHERE ts<?", (older_than_ts,))
+        await self.db.execute(
+            "DELETE FROM friend_requests WHERE ts<?", (older_than_ts,)
+        )
         return (cur1.rowcount or 0, cur2.rowcount or 0)
 
     # ---------------- notices ----------------

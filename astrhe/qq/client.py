@@ -34,21 +34,25 @@ class QQClient:
                 return False, "这条消息太久了，贴不了表情"
             return False, text
 
-    async def group_ids(self) -> set[str]:
-        """bot 所在的群号集合；失败返回空集合。"""
+    async def group_ids(self) -> set[str] | None:
+        """bot 所在的群号集合；失败返回 None，区别于确实没有群。"""
         try:
             groups = await self.call("get_group_list")
-            return {str(g.get("group_id")) for g in groups or [] if g.get("group_id")}
+            if not isinstance(groups, list):
+                return None
+            return {str(g.get("group_id")) for g in groups if g.get("group_id")}
         except Exception:  # noqa: BLE001
-            return set()
+            return None
 
-    async def friend_ids(self) -> set[str]:
-        """好友 QQ 号集合；失败返回空集合。"""
+    async def friend_ids(self) -> set[str] | None:
+        """好友 QQ 号集合；失败返回 None，区别于确实没有好友。"""
         try:
             friends = await self.call("get_friend_list")
-            return {str(f.get("user_id")) for f in friends or [] if f.get("user_id")}
+            if not isinstance(friends, list):
+                return None
+            return {str(f.get("user_id")) for f in friends if f.get("user_id")}
         except Exception:  # noqa: BLE001
-            return set()
+            return None
 
     async def self_id(self) -> str:
         try:

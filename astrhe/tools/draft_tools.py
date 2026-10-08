@@ -15,6 +15,7 @@ from ..platform import resolve_session_ref
 from .base import AstrHeFunctionTool
 from .validation import (
     validate_alarm,
+    validate_alarm_cancel,
     validate_anniversaries,
     validate_night_alarm_frequency,
 )
@@ -235,16 +236,39 @@ class DraftTools:
         if self.qq is None or self._tz_getter is None:
             return "闹钟草稿校验不可用：缺少平台或时区"
         payload, warning = await validate_alarm(payload, self.qq, self._tz_getter())
+        drafts = await self.storage.runs.get_drafts(self.run_id)
         active = [
             json.loads(d["payload_json"])
-            for d in await self.storage.runs.get_drafts(self.run_id)
+            for d in drafts
             if d["kind"] == "alarm" and d["id"] != kw.get("replace_draft_id")
         ]
+        cancelled_ids = {
+            json.loads(d["payload_json"])["alarm_id"]
+            for d in drafts
+            if d["kind"] == "alarm_cancel"
+        }
         await validate_night_alarm_frequency(
-            self.storage, payload, self._tz_getter(), self.run_id, active
+            self.storage,
+            payload,
+            self._tz_getter(),
+            self.run_id,
+            active,
+            excluded_alarm_ids=cancelled_ids,
         )
         result = await self._add("alarm", payload, kw.get("replace_draft_id", 0))
         return result + ("；注意：" + warning if warning else "")
+
+    async def _draft_alarm_cancel(
+        self, event: Any, alarm_id: int = 0, reason: str = "", **kw
+    ) -> str:
+        if not reason.strip():
+            return "取消闹钟必须写理由"
+        await validate_alarm_cancel(self.storage, int(alarm_id))
+        return await self._add(
+            "alarm_cancel",
+            {"alarm_id": int(alarm_id), "reason": reason.strip()},
+            kw.get("replace_draft_id", 0),
+        )
 
     async def _draft_person(self, event: Any, qq: str = "", **kw) -> str:
         qq = str(qq).strip()
@@ -254,14 +278,20 @@ class DraftTools:
         for key in ("relation_text", "recent_text", "expected_reason"):
             if kw.get(key):
                 payload[key] = str(kw[key])
-        for key in ("aliases", "anniversaries"):
-            if kw.get(key):
-                payload[key] = self._json_list(kw[key])
-        if "anniversaries" in kw:
-            raw = kw["anniversaries"]
-            payload["anniversaries"] = validate_anniversaries(
-                json.loads(raw) if isinstance(raw, str) else raw
-            )
+        if kw.get("aliases"):
+            payload["aliases"] = self._json_list(kw["aliases"])
+        raw = kw.get("anniversaries")
+        if isinstance(raw, str):
+            raw = raw.strip()
+            if raw:
+                try:
+                    raw = json.loads(raw)
+                except ValueError as exc:
+                    raise ValueError(
+                        'anniversaries 需要 JSON 数组，例如 [{"name":"生日","date":"10-11"}]'
+                    ) from exc
+        if raw is not None and raw != "":
+            payload["anniversaries"] = validate_anniversaries(raw)
         if kw.get("expected_friend"):
             active = {
                 json.loads(d["payload_json"])["qq"]

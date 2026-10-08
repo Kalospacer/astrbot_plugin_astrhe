@@ -103,11 +103,28 @@ def build_draft_tools(owner):
             fn=owner._draft_alarm,
         ),
         AstrHeFunctionTool(
+            name="astrhe_draft_alarm_cancel",
+            description=(
+                "取消尚未执行的 AstrHe 闹钟，参数：alarm_id（AstrHe 编号）、reason（理由）。"
+                "这里只写草稿，提交后才取消；改期或改内容请先写取消草稿，再新建闹钟草稿。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "alarm_id": {"type": "integer"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["alarm_id", "reason"],
+            },
+            fn=owner._draft_alarm_cancel,
+        ),
+        AstrHeFunctionTool(
             name="astrhe_draft_person",
             description=(
                 "更新关系本草稿。参数：qq；aliases（JSON 数组）；relation_text"
                 "（关系层，只在确有变化时给）；recent_text（近况层）；"
                 'anniversaries（JSON 数组，如 [{"name":"生日","date":"10-11"}]）；'
+                "不填、空字符串或 null 保留原纪念日，[] 清空；"
                 "expected_friend（true 时标为预期联系人，配合 expected_reason）。"
             ),
             parameters={
@@ -129,7 +146,7 @@ def build_draft_tools(owner):
             name="astrhe_draft_promise",
             description=(
                 "承诺账本变更草稿。参数：action（add/update）；add 时给 from_id、"
-                "to_id、content、due_date；update 时给 promise_id、status"
+                "to_id（双方一律填 QQ 号码）、content、due_date；update 时给 promise_id、status"
                 "（done/broken/waived）、reason。"
             ),
             parameters={

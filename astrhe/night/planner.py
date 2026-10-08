@@ -9,6 +9,7 @@ from typing import Any
 from .. import constants as C
 from ..prompts import planner as planner_prompts
 from ..timeutil import utc_now
+from ..tools.alarm_view import format_night_alarm
 from .agent_runner import run_night_agent
 
 
@@ -52,6 +53,7 @@ class Planner:
         *,
         time_info="",
         window=None,
+        self_id="",
     ):
         self.storage = storage
         self.context = context
@@ -60,6 +62,7 @@ class Planner:
         self.admins = admins
         self.tz = tz
         self.time_text = time_info
+        self.self_id = self_id
         self.window = window or (0, utc_now())
 
     def time_info(self, now_ts: float) -> str:
@@ -142,12 +145,12 @@ class Planner:
         latest_plan = await self.storage.plans.get_latest_plan()
         yesterday_plan = latest_plan["full_text"] if latest_plan else ""
 
-        cron_text = ""
+        alarms = await self.storage.alarms.list_alarms(-1)
+        cron_text = "\n\n".join(format_night_alarm(a, tz) for a in alarms)
         cron = getattr(self.context, "cron_manager", None)
         if cron is not None:
             try:
                 jobs = await cron.list_jobs("active_agent")
-                alarms = await self.storage.alarms.list_alarms(-1)
                 astrhe_ids = {a["cron_job_id"] for a in alarms if a["cron_job_id"]}
                 lines = []
                 for j in jobs:
@@ -157,9 +160,9 @@ class Planner:
                         f"[{tag}] {j.job_id}「{j.name}」→ {payload.get('session', '')} "
                         f"enabled={j.enabled} run_once={j.run_once}"
                     )
-                cron_text = "\n".join(lines)
+                cron_text += "\n【平台当前任务】\n" + "\n".join(lines)
             except Exception:  # noqa: BLE001
-                cron_text = "（读取唤醒任务失败）"
+                cron_text += "\n（读取平台当前唤醒任务失败）"
 
         last_run_note = (
             "上一次运行失败了，今天沿用上一份计划" if last_run_failed else ""
@@ -192,7 +195,7 @@ class Planner:
         模型失败抛 NightAgentError。
         """
         system = planner_prompts.build_planner_system(
-            self.persona_prompt, self.admins, self.time_info(utc_now())
+            self.persona_prompt, self.admins, self.time_info(utc_now()), self.self_id
         )
         text, contexts = await run_night_agent(
             self.context,

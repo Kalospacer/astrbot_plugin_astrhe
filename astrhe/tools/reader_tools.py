@@ -10,8 +10,8 @@ from typing import Any
 
 from .. import constants as C
 from ..platform import parse_umo, event_umo
-from ..timeutil import local_datetime_str
 from .base import AstrHeFunctionTool
+from .alarm_view import format_night_alarm
 from .secrecy import filter_secret_text
 
 
@@ -133,7 +133,7 @@ class ReaderTools:
             AstrHeFunctionTool(
                 name="astrhe_read_alarms",
                 description=(
-                    "读闹钟状态：AstrHe 建的闹钟（带跟踪状态）+ 全部唤醒任务清单"
+                    "读闹钟状态：AstrHe 建的闹钟（含时间、目的、背景与完整卡片）+ 全部唤醒任务清单"
                     "（含其他方式建的，用于查重）。"
                 ),
                 fn=self._read_alarms,
@@ -271,13 +271,7 @@ class ReaderTools:
         if alarms:
             lines.append("AstrHe 建的闹钟：")
             for a in alarms:
-                run_at = a["run_at"]
-                when = (
-                    local_datetime_str(run_at, self._tz())
-                    if run_at
-                    else a["cron_expression"]
-                )
-                lines.append(f"#{a['id']} [{a['status']}] → {a['target_umo']} @ {when}")
+                lines.append(format_night_alarm(a, self._tz()))
         # 全部唤醒任务（含外部建的），用于查重
         cron = getattr(self.context, "cron_manager", None)
         if cron is not None:

@@ -102,7 +102,7 @@ QUIET_HOURS_END_MINUTES = 8 * 60  # 08:00
 # 账本与缓存
 # ---------------------------------------------------------------------------
 
-#: messages / notices 保留秒数（30 天）
+#: messages / notices / friend_requests 保留秒数（30 天）
 LEDGER_RETENTION_SECONDS = 30 * 24 * 3600
 
 #: 群成员缓存有效期（秒），每晚刷新

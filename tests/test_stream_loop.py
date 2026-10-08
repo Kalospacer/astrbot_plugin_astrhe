@@ -202,3 +202,74 @@ def test_real_streaming_retry_keeps_tool_results_without_repeating_tool():
         assert not fake.sent_messages
 
     arun(run())
+
+
+def test_reporter_json_repair_uses_real_streaming_history_and_tool_result(tmp_path):
+    async def run():
+        from asyncio import Queue
+        from zoneinfo import ZoneInfo
+        from astrbot.core.star.context import Context as RealContext
+        from astrhe.night.reporter import FIX_JSON_PROMPT, Reporter
+        from astrhe.timeutil import utc_now
+        from tests.conftest import make_storage
+
+        tool_calls = []
+
+        class CountingEcho(EchoTool):
+            async def run(self, event, text=""):
+                tool_calls.append(text)
+                return await super().run(event, text)
+
+        class JsonRepairProvider(FakeStreamProvider):
+            async def text_chat_stream(self, **kwargs):
+                if self.rounds == 0:
+                    async for response in super().text_chat_stream(**kwargs):
+                        yield response
+                    return
+                self.rounds += 1
+                if self.rounds == 2:
+                    text = "蛋糕已准备好，但这次先输出了散文。"
+                else:
+                    assert self.rounds == 3
+                    history = [
+                        m.model_dump() if hasattr(m, "model_dump") else m
+                        for m in kwargs.get("contexts", [])
+                    ]
+                    assert any(m["role"] == "tool" for m in history)
+                    assert "echo: 夜间你好" in str(history)
+                    assert "先输出了散文" in str(history)
+                    assert FIX_JSON_PROMPT in str(history) + str(kwargs.get("prompt"))
+                    text = '{"summary":"蛋糕已准备好","big_events":[]}'
+                yield LLMResponse(
+                    role="assistant",
+                    result_chain=MessageChain().message(text),
+                )
+
+        fake = FakeContext()
+        provider = JsonRepairProvider()
+        ctx = RealContext(
+            Queue(), {}, None, _ProviderManager(provider), fake.platform_manager,
+            None, None, fake.persona_manager, None, None, fake.cron_manager,
+        )
+        storage = await make_storage(tmp_path)
+        try:
+            now = utc_now()
+            run_id = await storage.runs.start_run(plan_date="2026-10-08")
+            umo = "default:GroupMessage:20002"
+            await storage.ledger.add_message(
+                umo=umo, platform_id="default", message_type="GroupMessage",
+                session_id="20002", sender_id="10001", text="蛋糕已经准备好了",
+                ts=now - 1, platform_message_id="5010",
+            )
+            reporter = Reporter(
+                storage, ctx, "fake-stream", "测试人格", ZoneInfo("Asia/Shanghai"),
+                [CountingEcho()], self_id="99999",
+            )
+            result = await reporter.report_session(run_id, umo, now - 10, now + 1)
+            assert result["parse_ok"] and result["report"]["summary"] == "蛋糕已准备好"
+            assert provider.rounds == 3 and tool_calls == ["夜间你好"]
+            assert not fake.sent_messages
+        finally:
+            await storage.close()
+
+    arun(run())

@@ -14,8 +14,12 @@ from typing import Any
 
 from .. import constants as C
 from ..timeutil import utc_now
-from ..tools.schedule_tool import render_card_note, alarm_description
-from ..tools.validation import validate_alarm, validate_night_alarm_frequency
+from ..tools.alarm_card import render_card_note, alarm_description
+from ..tools.validation import (
+    validate_alarm,
+    validate_alarm_cancel,
+    validate_night_alarm_frequency,
+)
 
 
 class CommitError(Exception):
@@ -260,16 +264,31 @@ class DraftCommitter:
         async def _run() -> list[str]:
             results: list[str] = []
             drafts = await self.storage.runs.get_drafts(self.run_id, "applied")
-            for d in drafts:
+            # 先真正取消旧闹钟，再按实际状态检查新闹钟额度。
+            for d in sorted(drafts, key=lambda d: d["kind"] != "alarm_cancel"):
                 kind = d["kind"]
                 payload = json.loads(d["payload_json"] or "{}")
-                if kind == "alarm":
+                if kind == "alarm_cancel":
+                    results.append(await self._cancel_alarm(payload))
+                elif kind == "alarm":
                     results.append(await self._create_alarm(payload))
                 elif kind == "appearance":
                     results.append(await self._apply_appearance(payload))
             return results
 
         return await _run()
+
+    async def _cancel_alarm(self, payload: dict) -> str:
+        alarm_id = int(payload["alarm_id"])
+        try:
+            alarm = await validate_alarm_cancel(self.storage, alarm_id)
+            await self.context.cron_manager.delete_job(alarm["cron_job_id"])
+        except Exception as exc:
+            return f"取消闹钟 #{alarm_id} 失败，保留原状态：{exc}"
+        reason = payload["reason"]
+        await self.storage.alarms.set_status(alarm_id, "cancelled", reason)
+        await self.storage.alarms.add_event(alarm_id, "cancelled", reason)
+        return f"闹钟 #{alarm_id} 已取消：{reason}"
 
     async def _create_alarm(self, payload: dict) -> str:
         target_umo = payload.get("target_umo", "")
@@ -295,7 +314,7 @@ class DraftCommitter:
             await self.storage.alarms.set_status(alarm_id, "failed", str(exc))
             return f"闹钟 #{alarm_id} 失败（{target_umo}）：{exc}"
 
-        note_text = render_card_note(card)
+        note_text = render_card_note(card, target_umo)
         alarm_id = await self.storage.alarms.add_alarm(
             target_umo=target_umo,
             creator_id=C.NIGHT_ALARM_SENDER_ID,

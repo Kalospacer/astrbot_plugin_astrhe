@@ -27,6 +27,7 @@ class Reviewer:
         internal_tools: list,
         *,
         time_info="",
+        self_id="",
     ):
         self.storage = storage
         self.context = context
@@ -35,6 +36,7 @@ class Reviewer:
         self.admins = admins
         self.internal_tools = internal_tools
         self.time_info = time_info
+        self.self_id = self_id
 
     async def review(self, run_id: int, focus: str) -> str:
         """跑一次审稿，把意见写进 reviews 表并返回意见文本。
@@ -48,7 +50,7 @@ class Reviewer:
         drafts = await self.storage.runs.get_drafts(run_id)
         draft_text = self._render_drafts(drafts)
         system = reviewer_prompts.build_reviewer_system(
-            self.persona_prompt, self.admins, focus, self.time_info
+            self.persona_prompt, self.admins, focus, self.time_info, self.self_id
         )
         reports = await self.storage.runs.get_reports(run_id)
         summaries = "\n".join(

@@ -125,7 +125,7 @@ class Backfiller:
         return sorted(groups), sorted(friends)
 
     async def backfill_all(
-        self, window_start: float, window_end: float
+        self, window_start: float, window_end: float, *, self_id: str | None = None
     ) -> dict[str, Any]:
         """对全部候选会话补拉窗口内消息，返回统计信息。"""
         stats: dict[str, Any] = {
@@ -137,7 +137,8 @@ class Backfiller:
         self._merged_bot_count = 0
         groups, friends = await self.candidate_sessions(window_start)
         platform_id = self.platform.default_platform_id()
-        self_id = await self._get_self_id()
+        if self_id is None:
+            self_id = await self._get_self_id()
 
         for gid in groups:
             try:
@@ -315,6 +316,6 @@ class Backfiller:
         return False
 
     async def cleanup_old(self, now_ts: float) -> tuple[int, int]:
-        """清理超过保留期的 messages / notices。"""
+        """清理超过 30 天的消息、通知和好友申请。"""
         cutoff = now_ts - C.LEDGER_RETENTION_SECONDS
         return await self.storage.ledger.cleanup(cutoff)

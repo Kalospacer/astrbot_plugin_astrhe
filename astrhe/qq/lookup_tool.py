@@ -81,6 +81,8 @@ class QQLookupTool(_tool_base_class()):  # type: ignore[misc]
         if action == "is_friend":
             user_id = str(kwargs.get("user_id", ""))
             friends = await qq.friend_ids()
+            if friends is None:
+                return "平台暂时不可用，无法确认好友关系"
             return (
                 f"QQ {user_id} 是好友"
                 if user_id in friends

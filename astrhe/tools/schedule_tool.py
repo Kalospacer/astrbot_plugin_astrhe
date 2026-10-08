@@ -15,6 +15,7 @@ from typing import Any
 
 from .. import constants as C
 from ..platform import build_umo, is_valid_qq, event_umo
+from .alarm_card import render_card_note, alarm_description
 from .validation import validate_alarm, validate_alarm_time
 from ..timeutil import (
     local_datetime_str,
@@ -23,46 +24,6 @@ from ..timeutil import (
 from .secrecy import filter_secret_text, is_secret_visible_here
 
 TOOL_NAME = "astrhe_schedule"
-
-#: 卡片渲染时附在 note 末尾的标准操作说明
-STANDARD_NOTE_SUFFIX = (
-    "\n\n【标准操作说明】发送消息用 send_message_to_user：session 留空表示当前会话"
-    "（即本任务的目标会话）；需要 @ 某人时，在消息里用 mention_user 组件"
-    "（mention_user_id=对方 QQ 号）。对方回复时，参考 AstrHe 待办里属于这个会话的内容。"
-    "新建或修改定时任务请用 astrhe_schedule，不要用 future_task。"
-    "执行完的总结只写一句『已完成』，不要复述卡片里的内容。"
-)
-
-
-def render_card_note(card: dict[str, Any]) -> str:
-    """把闹钟卡片渲染成完整的 note 文本。"""
-    lines = ["【闹钟卡片】"]
-    labels = [
-        ("background", "背景"),
-        ("purpose", "目的"),
-        ("how", "怎么做"),
-        ("involved", "牵涉的人"),
-        ("mentions", "需要 @ 的人（QQ 号）"),
-        ("secret_from", "对谁保密"),
-        ("taboo", "禁忌（不能做的事、不能说漏的话）"),
-        ("agreed_reason", "约定时刻的理由"),
-    ]
-    for key, label in labels:
-        value = card.get(key)
-        if isinstance(value, list):
-            value = "、".join(str(v) for v in value)
-        if value:
-            lines.append(f"{label}：{value}")
-    return "\n".join(lines) + STANDARD_NOTE_SUFFIX
-
-
-def alarm_description(card: dict, alarm_id: int) -> str:
-    return (
-        f"AstrHe 闹钟 #{alarm_id}"
-        if card.get("secret_from")
-        else str(card.get("purpose", ""))
-    )
-
 
 class ScheduleToolImpl:
     """astrhe_schedule 的实现。"""
@@ -219,7 +180,7 @@ class ScheduleToolImpl:
         if deny:
             return deny
 
-        note_text = render_card_note(card)
+        note_text = render_card_note(card, target_umo)
         alarm_id = await self.storage.alarms.add_alarm(
             target_umo=target_umo,
             creator_id=sender_id,
@@ -363,7 +324,7 @@ class ScheduleToolImpl:
             if kwargs.get(key):
                 value = kwargs[key]
                 card[key] = [value] if isinstance(value, str) else value
-        note_text = render_card_note(card)
+        note_text = render_card_note(card, alarm["target_umo"])
         run_at_str = str(kwargs.get("run_at", "") or "")
         tz = self._tz_getter()
         if run_at_str:
@@ -376,7 +337,6 @@ class ScheduleToolImpl:
             updates["run_at"] = run_at_ts
             if alarm["cron_job_id"]:
                 try:
-                    await self.context.cron_manager.delete_job(alarm["cron_job_id"])
                     job = await self.context.cron_manager.add_active_job(
                         name=f"astrhe闹钟#{alarm_id}",
                         cron_expression=None,
@@ -392,9 +352,22 @@ class ScheduleToolImpl:
                         run_once=True,
                         run_at=datetime.fromtimestamp(run_at_ts, tz),
                     )
-                    await self.storage.alarms.bind_cron_job(alarm_id, job.job_id)
                 except Exception as exc:  # noqa: BLE001
-                    return f"修改定时任务失败: {exc}"
+                    return f"修改定时任务失败，旧闹钟已保留: {exc}"
+                try:
+                    await self.context.cron_manager.delete_job(alarm["cron_job_id"])
+                except Exception as exc:
+                    # 删除旧任务失败时撤销新任务，避免出现两个提醒。
+                    try:
+                        await self.context.cron_manager.delete_job(job.job_id)
+                    except Exception as rollback_exc:
+                        return (
+                            f"修改失败：删除旧任务失败（{exc}），"
+                            f"新任务 {job.job_id} 也未能撤销（{rollback_exc}），请管理员检查"
+                        )
+                    return f"修改失败，旧闹钟已保留：{exc}"
+                await self.storage.alarms.bind_cron_job(alarm_id, job.job_id)
+                updates["cron_expression"] = ""
         if not run_at_str and alarm["cron_expression"]:
             try:
                 validate_alarm_time(
@@ -404,12 +377,14 @@ class ScheduleToolImpl:
                 return str(exc)
         # 更新卡片与 note
         await self.storage.db.execute(
-            "UPDATE alarms SET card_json=?, note_text=?, run_at=COALESCE(?, run_at)"
+            "UPDATE alarms SET card_json=?, note_text=?, run_at=COALESCE(?, run_at),"
+            " cron_expression=COALESCE(?, cron_expression)"
             " WHERE id=?",
             (
                 json.dumps(card, ensure_ascii=False),
                 note_text,
                 updates.get("run_at"),
+                updates.get("cron_expression"),
                 alarm_id,
             ),
         )

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .common import persona_system
+from .common import persona_system, self_identity
 
 PLANNER_INSTRUCTION = """现在是深夜，你在做每天的复盘与规划。你刚才收到了各个会话的汇报，现在要想清楚：接下来要做什么、为什么做、怎么做。
 
@@ -22,6 +22,7 @@ PLANNER_INSTRUCTION = """现在是深夜，你在做每天的复盘与规划。�
 2. astrhe_draft_sections：把规划书里和每个会话相关的段落单独切出来（白天注入用，每段要短）。
 3. astrhe_draft_todo：待办。写清可见会话、保密对象、日期类型（today/future/deadline）、show_from。重复的可以合并；已经没必要的旧待办用 astrhe_draft_todo_drop 删掉并写理由。
 4. astrhe_draft_alarm：闹钟卡片。必填：目标会话、执行时间、背景、目的、怎么做、牵涉谁、要 @ 谁（QQ 号）、对谁保密、禁忌。落在深夜的，必须写 agreed 与理由。
+已有安排不再必要时，用 astrhe_draft_alarm_cancel 填闹钟编号与取消理由；改时间或内容统一用「取消旧闹钟 + 新建草稿」，提交时先取消再新建。不能用白天的 astrhe_schedule 绕过草稿与审稿。
 5. astrhe_draft_person：更新关系本。关系层（是谁、和bot的关系、称呼语气）只在确有变化时改；近况层可以常更新。
 6. astrhe_draft_promise：承诺的新增与状态变更。
 7. astrhe_draft_appearance（可选）：规划日的个性签名或在线状态。
@@ -29,7 +30,7 @@ PLANNER_INSTRUCTION = """现在是深夜，你在做每天的复盘与规划。�
 【流程】
 - 先写草稿，用 astrhe_read_drafts 检查，再调用 astrhe_request_review。按意见用 replace_draft_id 替换旧草稿，或 astrhe_draft_discard 撤回；可再审或确认。
 - 审稿通过、你也满意了，调用 astrhe_commit 一次性提交。
-- 至少成功审稿 1 次、至多 2 次。提交立即执行建闹钟等动作并返回每条结果；提交后不能修改或再次提交。
+- 至少成功审稿 1 次、至多 2 次。提交立即执行取消、新建闹钟等动作并返回每条结果；提交后不能修改或再次提交。
 - 会话使用 group:群号、private:QQ号 简写。你半夜不能直接发消息；想找谁说话，就定闹钟让白天的自己去说。
 - 相对日期（次日、下周三、11 号等）按该条消息的发送日期换算成具体日期。段落长度建议几百字以内，写清楚为止。
 
@@ -38,9 +39,11 @@ PLANNER_INSTRUCTION = """现在是深夜，你在做每天的复盘与规划。�
 """
 
 
-def build_planner_system(persona_prompt: str, admins: list[str], time_info: str) -> str:
+def build_planner_system(
+    persona_prompt: str, admins: list[str], time_info: str, self_id: str = ""
+) -> str:
     admin_text = "、".join(admins) if admins else "（未配置）"
-    parts = [persona_system(persona_prompt)]
+    parts = [persona_system(persona_prompt), self_identity(self_id)]
     parts.append(PLANNER_INSTRUCTION.format(admins=admin_text, time_info=time_info))
     return "\n\n".join(parts)
 

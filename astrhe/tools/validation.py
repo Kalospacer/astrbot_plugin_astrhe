@@ -112,10 +112,17 @@ async def validate_alarm(
     _, kind, sid = parse_umo(result["target_umo"])
     warning = ""
     if kind == "GroupMessage":
-        if sid not in await qq.group_ids():
+        groups = await qq.group_ids()
+        if groups is None:
+            warning = "平台暂时不可用，无法确认是否在目标群；已保留闹钟安排"
+        elif sid not in groups:
             raise ValueError(f"我不在群 {sid} 里")
-    elif sid not in await qq.friend_ids():
-        warning = "对方不是好友，消息可能被 QQ 拦截"
+    else:
+        friends = await qq.friend_ids()
+        if friends is None:
+            warning = "平台暂时不可用，无法确认好友关系；消息可能被 QQ 拦截"
+        elif sid not in friends:
+            warning = "对方不是好友，消息可能被 QQ 拦截"
     card = result.get("card") or {}
     for key in ("background", "purpose", "how"):
         if not str(card.get(key, "")).strip():
@@ -131,16 +138,18 @@ async def validate_alarm(
 
 
 async def validate_night_alarm_frequency(
-    storage, payload: dict, tz, run_id: int, active=None
+    storage, payload: dict, tz, run_id: int, active=None, *, excluded_alarm_ids=None
 ) -> None:
     """按本次运行和目标执行日计数，提交时再次检查长运行期间的变化。"""
     from ..timeutil import local_date_str
 
     active = active or []
+    excluded_alarm_ids = excluded_alarm_ids or set()
     alarms = [
         a
         for a in await storage.alarms.list_alarms(-1)
         if a["status"] not in ("cancelled", "failed")
+        and a["id"] not in excluded_alarm_ids
     ]
     if (
         sum(a["created_run_id"] == run_id for a in alarms) + len(active)
@@ -168,3 +177,19 @@ async def validate_night_alarm_frequency(
     )
     if count >= C.RATE_ALARM_SAME_TARGET_PER_DAY:
         raise ValueError("同一目标每天的主动闹钟达到频率上限")
+
+
+async def validate_alarm_cancel(storage, alarm_id: int) -> dict:
+    """取消草稿与实际执行共用：只允许撤销尚未执行的 AstrHe 闹钟。"""
+    alarm = await storage.alarms.get_alarm(alarm_id)
+    if alarm is None:
+        raise ValueError(f"找不到闹钟 #{alarm_id}")
+    events = await storage.alarms.events(alarm_id)
+    if alarm["status"] != "scheduled" or any(
+        e["kind"] in ("fired", "manual_run", "send_ok", "send_failed", "done")
+        for e in events
+    ):
+        raise ValueError(f"闹钟 #{alarm_id} 已执行或不再等待执行，不能取消")
+    if not alarm["cron_job_id"]:
+        raise ValueError(f"闹钟 #{alarm_id} 没有关联的定时任务")
+    return alarm

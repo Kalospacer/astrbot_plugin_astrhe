@@ -73,6 +73,7 @@ class Reporter:
         *,
         time_info="",
         admins=None,
+        self_id="",
     ):
         self.storage = storage
         self.context = context
@@ -82,6 +83,7 @@ class Reporter:
         self.internal_tools = internal_tools
         self.time_info = time_info
         self.admins = admins or []
+        self.self_id = self_id
         self._semaphore = asyncio.Semaphore(C.REPORT_CONCURRENCY)
 
     async def report_session(
@@ -111,21 +113,9 @@ class Reporter:
         participants = sorted({r["sender_id"] for r in rows if not r["is_bot"]})
         persons_brief = await self._persons_brief(participants)
         _, kind, sid = parse_umo(umo)
-        self_id = next((r["sender_id"] for r in rows if r["is_bot"]), "")
-        if not self_id:
-            try:
-                from ..platform import PlatformHelper
-                from astrbot.api import logger
-
-                self_id = str(
-                    (
-                        await PlatformHelper(self.context, logger).call_action(
-                            "get_login_info"
-                        )
-                    )["user_id"]
-                )
-            except Exception:
-                pass
+        self_id = self.self_id or next(
+            (r["sender_id"] for r in rows if r["is_bot"]), ""
+        )
         system = reporter_prompts.build_reporter_system(
             self.persona_prompt,
             persons_brief,
@@ -139,9 +129,6 @@ class Reporter:
             if len(chunks) == 1:
                 raw = await self._report_chunk(umo, chunks[0], system, 1, 1)
                 report = parse_report_json(raw)
-                if report is None:
-                    raw = await self._retry_json(umo, chunks[0], system)
-                    report = parse_report_json(raw)
             else:
                 partials = []
                 for idx, chunk in enumerate(chunks, 1):
@@ -149,20 +136,8 @@ class Reporter:
                         await self._report_chunk(umo, chunk, system, idx, len(chunks))
                     )
                 merge_prompt = reporter_prompts.build_merge_prompt(partials)
-                raw, _ = await run_night_agent(
-                    self.context,
-                    umo=umo,
-                    provider_id=self.provider_id,
-                    system_prompt=system,
-                    prompt=merge_prompt,
-                    tools=[],
-                )
+                raw = await self._json_response(umo, system, merge_prompt, [])
                 report = parse_report_json(raw)
-                if report is None:
-                    raw2 = await self._retry_merge(umo, system, merge_prompt)
-                    if raw2:
-                        raw = raw2
-                        report = parse_report_json(raw)
 
         await self.storage.runs.add_report(
             run_id=run_id,
@@ -185,50 +160,22 @@ class Reporter:
             f"这是会话 {umo} 的聊天记录（第 {index}/{total} 段）。"
             "读完后按 system 里的要求输出 JSON 汇报。\n\n"
         )
-        text, _ = await run_night_agent(
-            self.context,
-            umo=umo,
-            provider_id=self.provider_id,
-            system_prompt=system,
-            prompt=header + "\n".join(lines),
-            tools=self.internal_tools,
+        return await self._json_response(
+            umo, system, header + "\n".join(lines), self.internal_tools
         )
-        return text
 
-    async def _retry_json(self, umo: str, lines: list[str], system: str) -> str:
-        """解析失败追问一次。"""
+    async def _json_response(self, umo: str, system: str, prompt: str, tools: list) -> str:
+        """保留首次上下文；仅在解析失败时追问一次格式，不重读原始材料。"""
         text, contexts = await run_night_agent(
             self.context,
             umo=umo,
             provider_id=self.provider_id,
             system_prompt=system,
-            prompt="这是会话 "
-            + umo
-            + " 的聊天记录，请输出 JSON 汇报。\n\n"
-            + "\n".join(lines),
-            tools=self.internal_tools,
+            prompt=prompt,
+            tools=tools,
         )
-        # 追问：带着上一轮上下文再要一次合法 JSON
-        text2, _ = await run_night_agent(
-            self.context,
-            umo=umo,
-            provider_id=self.provider_id,
-            system_prompt=system,
-            prompt=FIX_JSON_PROMPT,
-            tools=[],
-            contexts=contexts,
-        )
-        return text2 or text
-
-    async def _retry_merge(self, umo: str, system: str, merge_prompt: str) -> str:
-        text, contexts = await run_night_agent(
-            self.context,
-            umo=umo,
-            provider_id=self.provider_id,
-            system_prompt=system,
-            prompt=merge_prompt,
-            tools=[],
-        )
+        if parse_report_json(text) is not None:
+            return text
         text2, _ = await run_night_agent(
             self.context,
             umo=umo,

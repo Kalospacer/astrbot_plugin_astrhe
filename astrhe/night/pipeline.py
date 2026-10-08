@@ -219,11 +219,12 @@ class NightPipeline:
 
         # ① 补拉
         self._set_stage("backfill")
+        self_id = await self.qq.self_id()
         backfill_stats: dict[str, Any] = {}
         if self.backfiller is not None:
             try:
                 backfill_stats = await self.backfiller.backfill_all(
-                    window_start, window_end
+                    window_start, window_end, self_id=self_id
                 )
             except Exception as exc:  # noqa: BLE001 - 补拉失败不让整晚失败
                 backfill_stats = {"failed": [str(exc)]}
@@ -262,6 +263,7 @@ class NightPipeline:
             reader_tools,
             time_info=time_info,
             admins=self._admins(),
+            self_id=self_id,
         )
         umos = await self.storage.ledger.list_session_umos(window_start)
         reports = await self._run_reporters(
@@ -282,6 +284,7 @@ class NightPipeline:
             tz,
             time_info=time_info,
             window=(window_start, window_end),
+            self_id=self_id,
         )
         reviewer = Reviewer(
             self.storage,
@@ -291,6 +294,7 @@ class NightPipeline:
             admins,
             reader_tools,
             time_info=time_info,
+            self_id=self_id,
         )
         committer = DraftCommitter(
             self.storage,
@@ -412,9 +416,9 @@ class NightPipeline:
             drafts = await self.storage.runs.get_drafts(committer.run_id)
             self._commit_state["committed"] = True
             actions = [
-                json.loads(d["payload_json"])
-                for d in drafts
-                if d["kind"] in ("alarm", "appearance", "person")
+                {"kind": d["kind"], **json.loads(d["payload_json"])}
+                for d in sorted(drafts, key=lambda d: d["kind"] != "alarm_cancel")
+                if d["kind"] in ("alarm", "alarm_cancel", "appearance", "person")
             ]
             return "演练通过，不写入正式数据。将执行：" + json.dumps(
                 actions, ensure_ascii=False

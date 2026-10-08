@@ -121,6 +121,7 @@ def test_materials_include_pending_notes_and_all_speakers(tmp_path):
                 [],
                 time_info="规划日：2026-10-08 星期四",
                 admins=["10001"],
+                self_id="99999",
             )
             await rep.report_session(rid, UMO, now - 100, now + 1)
             system = ctx.tool_loop_agent.calls[-1]["system_prompt"]
