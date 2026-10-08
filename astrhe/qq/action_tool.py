@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..platform import event_umo, parse_umo
 from ..timeutil import utc_now
 from .emoji_table import resolve_emoji, supported_meanings
 
@@ -29,7 +30,7 @@ _ONLINE_PRESETS = {
 }
 
 _ACTIONS = (
-    "react（给一条消息贴表情回应，参数 message_id、emoji；emoji 可以填含义如「赞」「爱心」或编号）\n"
+    "react（给一条消息贴表情回应，message_id 不传默认当前消息，参数 emoji；emoji 可以填含义如「赞」「爱心」或编号）\n"
     "poke（戳一戳某人，参数 user_id，群里加 group_id）\n"
     "like（给某人名片点赞，参数 user_id、times（1-10））\n"
     "signature（改我的个性签名，参数 text）\n"
@@ -68,7 +69,10 @@ class QQActionTool(_tool_base_class()):  # type: ignore[misc]
                 "text": {"type": "string", "description": "signature 的签名内容"},
                 "preset": {"type": "string", "description": "status 的预设名"},
                 "wording": {"type": "string", "description": "status 的自定义状态文字"},
-                "face_id": {"type": "integer", "description": "status 自定义状态的图标编号"},
+                "face_id": {
+                    "type": "integer",
+                    "description": "status 自定义状态的图标编号",
+                },
             },
             "required": ["action"],
         }
@@ -77,9 +81,19 @@ class QQActionTool(_tool_base_class()):  # type: ignore[misc]
     async def run(self, event: Any, action: str = "", **kwargs: Any) -> str:
         umo = ""
         try:
-            umo = event.unified_msg_origin
+            umo = event_umo(event)
         except Exception:  # noqa: BLE001
             pass
+        if action == "react" and not kwargs.get("message_id"):
+            extras = getattr(event, "_extras", {}) or {}
+            if "cron_payload" not in extras:
+                kwargs["message_id"] = str(
+                    getattr(getattr(event, "message_obj", None), "message_id", "") or ""
+                )
+        if action == "poke" and not kwargs.get("group_id"):
+            _, kind, sid = parse_umo(umo)
+            if kind == "GroupMessage":
+                kwargs["group_id"] = sid
         try:
             return await self._dispatch(action, umo=umo, **kwargs)
         except Exception as exc:  # noqa: BLE001

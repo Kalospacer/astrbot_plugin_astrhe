@@ -89,3 +89,19 @@ def parse_run_at(value: str, tz: tzinfo) -> float:
 def format_run_at(ts: float, tz: tzinfo) -> str:
     """把时间戳格式化为带时区偏移的 ISO 字符串（供 add_active_job 的 run_at）。"""
     return datetime.fromtimestamp(ts, tz).isoformat()
+
+
+def build_time_info(window_start: float, window_end: float, plan_date: str, tz) -> str:
+    """三个夜间角色共用绝对日期与星期，不使用容易错位的相对规划日。"""
+    day = datetime.strptime(plan_date, "%Y-%m-%d").replace(tzinfo=tz)
+    dates = [
+        local_datetime_str((day + timedelta(days=i)).timestamp(), tz).replace(
+            " 00:00", ""
+        )
+        for i in range(7)
+    ]
+    return (
+        f"复盘范围：{local_datetime_str(window_start, tz)} 至 {local_datetime_str(window_end, tz)}\n"
+        f"规划日：{dates[0]}\n当前时刻：{local_datetime_str(utc_now(), tz)}\n"
+        "从规划日起七天：" + "；".join(dates)
+    )

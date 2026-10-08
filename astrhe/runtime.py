@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
@@ -55,17 +56,26 @@ class AstrHeRuntime:
         self.friend_requests = FriendRequestManager(self.storage, self.qq, logger)
         self.day_tools = DayTools(self.storage, self.tz)
         self.schedule_impl = ScheduleToolImpl(
-            self.storage, context, self.qq, self.rate_limiter,
-            self.tz, self.secrecy, self.admins,
+            self.storage,
+            context,
+            self.qq,
+            self.rate_limiter,
+            self.tz,
+            self.secrecy,
+            self.admins,
+            self.friend_requests,
         )
         self.reader_tools = ReaderTools(
             self.storage, context, self.tz, self._default_window, self.secrecy
         )
-        self.injector = Injector(self.storage, self.tz, self.secrecy, self.enabled, logger)
+        self.injector = Injector(
+            self.storage, self.tz, self.secrecy, self.enabled, logger
+        )
         self.alarm_tracker = AlarmTracker(self.storage, context, self.tz, logger)
         self.scheduler = NightScheduler(self.storage, self.tz, self.run_night, logger)
         self.webapi = WebApi(self.storage, context, self.tz, self.status_dict)
 
+        self._external_tasks: set[asyncio.Task] = set()
         self._tools_registered = False
         self._current_pipeline: NightPipeline | None = None
 
@@ -112,6 +122,8 @@ class AstrHeRuntime:
         await self.scheduler.stop()
         # 进行中的运行由 scheduler.stop() 取消，pipeline 内部按
         # 「提交前判失败、提交后外部动作照常收尾」的规则收尾
+        while self._external_tasks:
+            await asyncio.gather(*self._external_tasks, return_exceptions=True)
         await self.storage.close()
 
     # ---------------- 工具注册 ----------------
@@ -130,22 +142,57 @@ class AstrHeRuntime:
         schedule_params = {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "description": "create / list / edit / cancel"},
-                "target_type": {"type": "string", "description": "current / group / private"},
+                "action": {
+                    "type": "string",
+                    "description": "create / list / edit / cancel",
+                },
+                "target_type": {
+                    "type": "string",
+                    "description": "current / group / private",
+                },
                 "target_id": {"type": "string", "description": "群号或 QQ 号"},
-                "run_at": {"type": "string", "description": "执行时间，如 2026-10-11 00:00"},
-                "cron_expression": {"type": "string", "description": "重复规则（cron 表达式）"},
+                "run_at": {
+                    "type": "string",
+                    "description": "执行时间，如 2026-10-11 00:00",
+                },
+                "cron_expression": {
+                    "type": "string",
+                    "description": "重复规则（cron 表达式）",
+                },
                 "background": {"type": "string", "description": "背景（必填）"},
                 "purpose": {"type": "string", "description": "目的（必填）"},
                 "how": {"type": "string", "description": "怎么做（必填）"},
-                "involved": {"type": "array", "items": {"type": "string"}, "description": "牵涉的人"},
-                "mentions": {"type": "array", "items": {"type": "string"}, "description": "要 @ 的 QQ 号"},
-                "secret_from": {"type": "array", "items": {"type": "string"}, "description": "对谁保密"},
+                "involved": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "牵涉的人",
+                },
+                "mentions": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "要 @ 的 QQ 号",
+                },
+                "secret_from": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "对谁保密",
+                },
                 "taboo": {"type": "string", "description": "禁忌"},
                 "agreed": {"type": "boolean", "description": "是否事先约定好的时刻"},
                 "agreed_reason": {"type": "string", "description": "约定理由"},
-                "alarm_id": {"type": "integer", "description": "edit / cancel 时的闹钟编号"},
-                "job_id": {"type": "string", "description": "cancel 外部任务时的 job_id"},
+                "alarm_id": {
+                    "type": "integer",
+                    "description": "edit / cancel 时的闹钟编号",
+                },
+                "expect_friend_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "管理员标记预期联系人，立即检查已有申请",
+                },
+                "job_id": {
+                    "type": "string",
+                    "description": "cancel 外部任务时的 job_id",
+                },
             },
             "required": ["action"],
         }
@@ -217,7 +264,12 @@ class AstrHeRuntime:
         if kind == "reader":
             window = kwargs.get("window") or self._default_window()
             reader = ReaderTools(
-                self.storage, self.context, self.tz, lambda: window, self.secrecy
+                self.storage,
+                self.context,
+                self.tz,
+                lambda: window,
+                self.secrecy,
+                run_id=kwargs.get("run_id"),
             )
             return reader.build()
         if kind == "draft":
@@ -226,11 +278,17 @@ class AstrHeRuntime:
                 kwargs["run_id"],
                 kwargs["request_review_cb"],
                 kwargs["commit_cb"],
+                qq_client=self.qq,
+                tz_getter=self.tz,
+                commit_state=kwargs.get("commit_state"),
             ).build()
         return []
 
     async def run_night(self, mode: str = "auto") -> dict[str, Any]:
         """调度器与指令共用的入口。"""
+        if self._external_tasks:
+            self.logger.info("[AstrHe] 上次提交的外部动作仍在收尾，跳过本次触发")
+            return {"status": "skipped", "reason": "上次提交仍在收尾"}
         pipeline = NightPipeline(
             storage=self.storage,
             context=self.context,
@@ -247,11 +305,21 @@ class AstrHeRuntime:
             logger=self.logger,
         )
         pipeline.alarm_tracker = self.alarm_tracker
+        pipeline.external_tasks = self._external_tasks
         self._current_pipeline = pipeline
         try:
             return await pipeline.run(mode)
         finally:
-            self._current_pipeline = None
+            if not self._external_tasks:
+                self._current_pipeline = None
+            else:
+
+                def clear_finished_pipeline(_):
+                    if self._current_pipeline is pipeline and not self._external_tasks:
+                        self._current_pipeline = None
+
+                for task in tuple(self._external_tasks):
+                    task.add_done_callback(clear_finished_pipeline)
 
     # ---------------- 指令与状态 ----------------
 
@@ -259,22 +327,29 @@ class AstrHeRuntime:
         """run / dryrun 指令：开后台任务，立刻回复。"""
         if not self.enabled():
             return "AstrHe 还没启用（插件设置里 enabled 是关的）"
+        if self._external_tasks:
+            return "上一次已提交，外部动作仍在收尾，等它完成后再运行"
         result = await self.scheduler.trigger(mode)
         if result is None:
             return "上一次夜间运行还在进行，等它跑完吧"
         return "已开始" + ("（演练模式，不提交）" if mode == "dry" else "")
 
     async def cmd_stop(self) -> str:
+        if self._external_tasks and not self.scheduler.is_running:
+            return "计划已经提交，外部动作正在收尾，停止不会撤销它们"
         return await self.scheduler.stop_running()
 
     async def cmd_status(self) -> str:
         latest = await self.storage.runs.latest_run()
         lines = []
-        if self.scheduler.is_running and self._current_pipeline is not None:
+        if (
+            self.scheduler.is_running or self._external_tasks
+        ) and self._current_pipeline is not None:
             pipeline = self._current_pipeline
             elapsed = int(time.time() - pipeline.stage_since)
             lines.append(
-                f"进行中：当前阶段 {pipeline.stage}，本阶段已用 {elapsed} 秒"
+                f"进行中：当前阶段 {pipeline.stage}，本阶段已用 {elapsed} 秒，"
+                f"总计 {int(time.time() - pipeline.started_at)} 秒"
             )
         if latest is None:
             lines.append("还没有运行记录")
@@ -293,11 +368,14 @@ class AstrHeRuntime:
         return "\n".join(lines)
 
     def status_dict(self) -> dict[str, Any]:
-        if self.scheduler.is_running and self._current_pipeline is not None:
+        if (
+            self.scheduler.is_running or self._external_tasks
+        ) and self._current_pipeline is not None:
             pipeline = self._current_pipeline
             return {
                 "running": True,
                 "stage": pipeline.stage,
+                "elapsed_seconds": int(time.time() - pipeline.started_at),
                 "stage_elapsed_seconds": int(time.time() - pipeline.stage_since),
             }
         return {"running": False}

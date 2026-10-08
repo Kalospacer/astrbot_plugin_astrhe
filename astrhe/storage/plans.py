@@ -22,15 +22,16 @@ class PlansRepo:
         plan_date: str,
         full_text: str,
         reflection: str = "",
+        day_reminders: str = "",
     ) -> int:
         """写入规划书；同一天重复提交时覆盖。"""
         await self.db.execute(
-            "INSERT INTO plans(run_id, plan_date, full_text, reflection, created_at)"
-            " VALUES(?,?,?,?,?) "
+            "INSERT INTO plans(run_id, plan_date, full_text, reflection, day_reminders, created_at)"
+            " VALUES(?,?,?,?,?,?) "
             "ON CONFLICT(plan_date) DO UPDATE SET run_id=excluded.run_id,"
             " full_text=excluded.full_text, reflection=excluded.reflection,"
-            " created_at=excluded.created_at",
-            (run_id, plan_date, full_text, reflection, utc_now()),
+            " day_reminders=excluded.day_reminders, created_at=excluded.created_at",
+            (run_id, plan_date, full_text, reflection, day_reminders, utc_now()),
         )
         row = await self.db.fetchone(
             "SELECT id FROM plans WHERE plan_date=?", (plan_date,)
@@ -175,7 +176,13 @@ class PlansRepo:
         cur = await self.db.execute(
             "INSERT INTO promises(from_id, to_id, content, evidence_json, due_date)"
             " VALUES(?,?,?,?,?)",
-            (from_id, to_id, content, json.dumps(evidence or [], ensure_ascii=False), due_date),
+            (
+                from_id,
+                to_id,
+                content,
+                json.dumps(evidence or [], ensure_ascii=False),
+                due_date,
+            ),
         )
         return int(cur.lastrowid)
 

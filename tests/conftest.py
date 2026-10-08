@@ -87,7 +87,11 @@ class FakeApi:
     """模拟 CQHttp api.call_action，actions 是 {动作名: 返回值或callable或异常}。"""
 
     def __init__(self, actions: dict | None = None):
-        self.actions = actions or {}
+        self.actions = {
+            "get_group_list": [{"group_id": 20002}],
+            "get_friend_list": [{"user_id": 40004}],
+        }
+        self.actions.update(actions or {})
         self.calls: list[tuple] = []
 
     async def call_action(self, action: str, **params):
@@ -120,8 +124,11 @@ class FakePlatform:
 
 
 class FakePersonaManager:
+    def get_persona_v3_by_id(self, persona_id):
+        return {"prompt": "选定的人格"} if persona_id == "selected" else None
+
     async def get_default_persona_v3(self, umo=None):
-        return SimpleNamespace(prompt="你是测试人格。")
+        return {"prompt": "你是测试人格。"}
 
 
 class ScriptedToolLoop:
@@ -157,17 +164,25 @@ class FakeContext:
     def __init__(self, api_actions: dict | None = None, config: dict | None = None):
         self.cron_manager = FakeCronManager()
         self.api = FakeApi(api_actions)
-        self.platform_manager = SimpleNamespace(
-            platform_insts=[FakePlatform(self.api)]
-        )
+        self.platform_manager = SimpleNamespace(platform_insts=[FakePlatform(self.api)])
         self.persona_manager = FakePersonaManager()
-        self._config = config or {"timezone": "Asia/Shanghai", "admins_id": ["10001", "astrbot"]}
+        self._config = config or {
+            "timezone": "Asia/Shanghai",
+            "admins_id": ["10001", "astrbot"],
+        }
         self.sent_messages: list = []
         self.tool_loop_agent = ScriptedToolLoop()
         self.registered_web_apis: list = []
         self.registered_tools: list = []
-        self.provider_manager = SimpleNamespace(
-            llm_tools=SimpleNamespace(func_list=[])
+        self.provider_manager = SimpleNamespace(llm_tools=SimpleNamespace(func_list=[]))
+
+    def get_llm_tool_manager(self):
+        from astrbot.core.agent.tool import ToolSet
+
+        return SimpleNamespace(
+            get_full_tool_set=lambda: ToolSet(
+                tools=self.provider_manager.llm_tools.func_list
+            )
         )
 
     def get_config(self, umo=None):
@@ -299,3 +314,10 @@ def tz():
     from zoneinfo import ZoneInfo
 
     return ZoneInfo("Asia/Shanghai")
+
+
+@pytest.fixture(autouse=True)
+def no_retry_wait(monkeypatch):
+    from astrhe import constants as C
+
+    monkeypatch.setattr(C, "NIGHT_RETRY_DELAY_SECONDS", 0)

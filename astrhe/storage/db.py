@@ -87,7 +87,8 @@ CREATE TABLE IF NOT EXISTS drafts (
     kind TEXT NOT NULL,
     payload_json TEXT NOT NULL DEFAULT '{}',
     seq INTEGER NOT NULL DEFAULT 0,
-    applied INTEGER NOT NULL DEFAULT 0
+    applied INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'active'
 );
 CREATE INDEX IF NOT EXISTS idx_drafts_run ON drafts(run_id);
 
@@ -105,6 +106,7 @@ CREATE TABLE IF NOT EXISTS plans (
     plan_date TEXT NOT NULL,
     full_text TEXT NOT NULL DEFAULT '',
     reflection TEXT NOT NULL DEFAULT '',
+    day_reminders TEXT NOT NULL DEFAULT '',
     created_at REAL NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_plans_date ON plans(plan_date);
@@ -150,6 +152,15 @@ CREATE TABLE IF NOT EXISTS alarms (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_alarms_job ON alarms(cron_job_id)
     WHERE cron_job_id != '';
+
+CREATE TABLE IF NOT EXISTS alarm_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    alarm_id INTEGER NOT NULL,
+    ts REAL NOT NULL,
+    kind TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_alarm_events_alarm ON alarm_events(alarm_id, ts);
 
 CREATE TABLE IF NOT EXISTS persons (
     qq TEXT PRIMARY KEY,
@@ -206,6 +217,20 @@ class Database:
         await conn.executescript(SCHEMA)
         await conn.commit()
         self._conn = conn
+        await self.ensure_column("drafts", "status", "TEXT NOT NULL DEFAULT 'active'")
+        await self.ensure_column("plans", "day_reminders", "TEXT NOT NULL DEFAULT ''")
+        await conn.execute(
+            "UPDATE drafts SET status='applied' WHERE applied=1 AND status='active'"
+        )
+        await conn.commit()
+
+    async def ensure_column(self, table: str, column: str, definition: str) -> None:
+        """迁移本插件固定表结构；只接受内部常量，不接受用户输入。"""
+        rows = await self.conn.execute(f"PRAGMA table_info({table})")
+        if column not in {r[1] for r in await rows.fetchall()}:
+            await self.conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+            )
 
     async def close(self) -> None:
         if self._conn is not None:

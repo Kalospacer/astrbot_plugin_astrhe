@@ -11,5 +11,12 @@
     "hint": "夜间汇报、规划、审稿共用这一个模型。留空时使用 AstrBot 当前默认的聊天模型。",
     "default": "",
     "_special": "select_provider"
+  },
+  "persona_id": {
+    "type": "string",
+    "description": "夜间分身使用的人格",
+    "hint": "选择 AstrBot 已有的人格；留空或所选人格不存在时使用 AstrBot 默认人格。汇报、规划、审稿共用。",
+    "_special": "select_persona",
+    "default": ""
   }
 }

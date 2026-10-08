@@ -8,7 +8,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from astrhe.scheduler import NightScheduler
-from astrhe.timeutil import local_date_str, next_midnight_ts
+from astrhe.timeutil import local_date_str, next_midnight_ts, utc_now
 from tests.conftest import FakeLogger, arun, make_storage
 
 TZ = ZoneInfo("Asia/Shanghai")
@@ -28,7 +28,10 @@ def test_next_midnight():
 
 def test_plan_date_is_local_date():
     # plan_date = 运行时刻的本地日期
-    assert local_date_str(datetime(2026, 10, 8, 0, 0, tzinfo=TZ).timestamp(), TZ) == "2026-10-08"
+    assert (
+        local_date_str(datetime(2026, 10, 8, 0, 0, tzinfo=TZ).timestamp(), TZ)
+        == "2026-10-08"
+    )
 
 
 async def _main_missed(tmp_path):
@@ -49,9 +52,10 @@ async def _main_missed(tmp_path):
 
         # 24 小时内有成功提交 → 不补跑
         triggered.clear()
-        run_id = await s.runs.start_run(plan_date="2026-10-07")
+        run_id = await s.runs.start_run(plan_date=local_date_str(utc_now(), TZ))
         await s.runs.finish_run(run_id, "committed")
         await scheduler._missed_run_check_inner()
+        await asyncio.sleep(0)
         assert triggered == []
 
         # 残留的 running 记录被标记 failed
@@ -95,3 +99,71 @@ async def _main_overlap_and_stop(tmp_path):
 
 def test_overlap_and_stop(tmp_path):
     arun(_main_overlap_and_stop(tmp_path))
+
+
+def test_stop_preserves_next_midnight_loop(tmp_path, monkeypatch):
+    async def check():
+        s = await make_storage(tmp_path)
+        try:
+            import astrhe.scheduler as module
+
+            real_sleep = asyncio.sleep
+            midnight = asyncio.Queue()
+            calls = asyncio.Queue()
+
+            async def clock(delay):
+                await midnight.get()
+
+            async def callback(mode):
+                await calls.put(mode)
+                await asyncio.Event().wait()
+
+            scheduler = NightScheduler(s, lambda: TZ, callback, FakeLogger())
+            monkeypatch.setattr(module.asyncio, "sleep", clock)
+            task = asyncio.create_task(scheduler._loop())
+            scheduler._task = task
+            await midnight.put(True)
+            assert await asyncio.wait_for(calls.get(), 1) == "auto"
+            await scheduler.stop_running()
+            await real_sleep(0)
+            await real_sleep(0)
+            assert not task.done()
+            await midnight.put(True)
+            assert await asyncio.wait_for(calls.get(), 1) == "auto"
+            await scheduler.stop()
+            await real_sleep(0)
+        finally:
+            await s.close()
+
+    arun(check())
+
+
+def test_restart_failed_date_catches_up(tmp_path):
+    async def check():
+        s = await make_storage(tmp_path)
+        try:
+            today = local_date_str(utc_now(), TZ)
+            old = await s.runs.start_run(plan_date="2000-01-01")
+            await s.runs.finish_run(old, "committed")
+            interrupted = await s.runs.start_run(plan_date=today)
+            calls = []
+
+            async def callback(mode):
+                calls.append(mode)
+
+            scheduler = NightScheduler(s, lambda: TZ, callback, FakeLogger())
+            await scheduler._missed_run_check_inner()
+            await scheduler._running_task
+            assert calls == ["auto"]
+            assert (await s.runs.get_run(interrupted))["status"] == "failed"
+            now = await s.runs.start_run(plan_date=today)
+            await s.runs.finish_run(now, "committed")
+            calls.clear()
+            await scheduler._missed_run_check_inner()
+            await asyncio.sleep(0)
+            assert calls == []
+            assert (await s.runs.previous_run(now))["id"] == interrupted
+        finally:
+            await s.close()
+
+    arun(check())

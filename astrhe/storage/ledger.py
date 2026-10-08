@@ -74,6 +74,15 @@ class LedgerRepo:
             (umo, since_ts),
         )
 
+    async def remove_bot_temps(self, umo: str, start: float, end: float) -> int:
+        """仅在历史完整覆盖窗口后，用平台消息替换无 id 的临时回复。"""
+        cur = await self.db.execute(
+            "DELETE FROM messages WHERE umo=? AND is_bot=1 AND ts>=? AND ts<=?"
+            " AND (platform_message_id IS NULL OR platform_message_id='')",
+            (umo, start, end),
+        )
+        return cur.rowcount
+
     async def attach_platform_id(self, row_id: int, platform_message_id: str) -> None:
         """给 bot 临时记录补上平台 message_id（合并时）。"""
         await self.db.execute(
@@ -97,8 +106,8 @@ class LedgerRepo:
     async def list_session_umos(self, since_ts: float) -> list[str]:
         """窗口内有消息记录的会话 UMO 列表。"""
         rows = await self.db.fetchall(
-            "SELECT DISTINCT umo FROM messages WHERE ts>=? ORDER BY umo",
-            (since_ts,),
+            "SELECT umo FROM messages WHERE ts>=? UNION SELECT umo FROM notices WHERE ts>=? ORDER BY umo",
+            (since_ts, since_ts),
         )
         return [r["umo"] for r in rows]
 
@@ -143,19 +152,20 @@ class LedgerRepo:
         *,
         umo: str | None = None,
         limit: int = 50,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         """关键词搜索（排除已撤回）。since_ts=0 表示搜全部账本。"""
         like = f"%{keyword}%"
         if umo:
             return await self.db.fetchall(
                 "SELECT * FROM messages WHERE umo=? AND ts>=? AND recalled=0 "
-                "AND text LIKE ? ORDER BY ts DESC LIMIT ?",
-                (umo, since_ts, like, limit),
+                "AND text LIKE ? ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?",
+                (umo, since_ts, like, limit, offset),
             )
         return await self.db.fetchall(
             "SELECT * FROM messages WHERE ts>=? AND recalled=0 "
-            "AND text LIKE ? ORDER BY ts DESC LIMIT ?",
-            (since_ts, like, limit),
+            "AND text LIKE ? ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?",
+            (since_ts, like, limit, offset),
         )
 
     async def get_message_by_platform_id(
@@ -196,7 +206,9 @@ class LedgerRepo:
 
     async def cleanup(self, older_than_ts: float) -> tuple[int, int]:
         """清理超过保留期的 messages 与 notices，返回删除条数。"""
-        cur1 = await self.db.execute("DELETE FROM messages WHERE ts<?", (older_than_ts,))
+        cur1 = await self.db.execute(
+            "DELETE FROM messages WHERE ts<?", (older_than_ts,)
+        )
         cur2 = await self.db.execute("DELETE FROM notices WHERE ts<?", (older_than_ts,))
         return (cur1.rowcount or 0, cur2.rowcount or 0)
 
@@ -216,7 +228,15 @@ class LedgerRepo:
         await self.db.execute(
             "INSERT INTO notices(umo, kind, actor_id, target_id, message_id, detail_json, ts)"
             " VALUES(?,?,?,?,?,?,?)",
-            (umo, kind, actor_id, target_id, message_id, json.dumps(detail or {}, ensure_ascii=False), ts),
+            (
+                umo,
+                kind,
+                actor_id,
+                target_id,
+                message_id,
+                json.dumps(detail or {}, ensure_ascii=False),
+                ts,
+            ),
         )
 
     async def get_notices(

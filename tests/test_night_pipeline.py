@@ -38,21 +38,35 @@ def _build_pipeline(s, ctx, logger):
     def provider(kind: str, **kwargs: Any):
         if kind == "reader":
             window = kwargs.get("window") or (0, 2e10)
-            return ReaderTools(s, ctx, lambda: TZ, lambda: window, secrecy).build()
+            return ReaderTools(
+                s, ctx, lambda: TZ, lambda: window, secrecy, run_id=kwargs.get("run_id")
+            ).build()
         if kind == "draft":
             return DraftTools(
-                s, kwargs["run_id"], kwargs["request_review_cb"], kwargs["commit_cb"]
+                s,
+                kwargs["run_id"],
+                kwargs["request_review_cb"],
+                kwargs["commit_cb"],
+                qq_client=qq,
+                tz_getter=lambda: TZ,
+                commit_state=kwargs.get("commit_state"),
             ).build()
         return []
 
     pipeline = NightPipeline(
-        storage=s, context=ctx, config={"provider_id": "fake-provider"},
-        platform_helper=PlatformHelper(ctx, logger), qq_client=qq,
-        rate_limiter=rate_limiter, secrecy_resolver=secrecy,
-        admins_getter=lambda: ["10001"], tz_getter=lambda: TZ,
+        storage=s,
+        context=ctx,
+        config={"provider_id": "fake-provider"},
+        platform_helper=PlatformHelper(ctx, logger),
+        qq_client=qq,
+        rate_limiter=rate_limiter,
+        secrecy_resolver=secrecy,
+        admins_getter=lambda: ["10001"],
+        tz_getter=lambda: TZ,
         backfiller=Backfiller(s, PlatformHelper(ctx, logger), logger),
         friend_request_manager=FriendRequestManager(s, qq, logger),
-        internal_tools_provider=provider, logger=logger,
+        internal_tools_provider=provider,
+        logger=logger,
     )
     pipeline.alarm_tracker = AlarmTracker(s, ctx, lambda: TZ, logger)
     return pipeline
@@ -60,19 +74,31 @@ def _build_pipeline(s, ctx, logger):
 
 async def _seed_message(s):
     await s.ledger.add_message(
-        umo=GROUP_UMO, platform_id="default", message_type="GroupMessage",
-        session_id="20002", sender_id="10001", text="明天商量一下生日的事",
-        ts=utc_now() - 3600, platform_message_id="7001",
+        umo=GROUP_UMO,
+        platform_id="default",
+        message_type="GroupMessage",
+        session_id="20002",
+        sender_id="10001",
+        text="明天商量一下生日的事",
+        ts=utc_now() - 3600,
+        platform_message_id="7001",
     )
 
 
 def _reporter_handler(kwargs):
-    return json.dumps({
-        "summary": "今天群里商量了生日的事",
-        "big_events": [], "interesting": [], "self_interest": [],
-        "promises": [], "plan_candidates": [], "person_updates": [],
-        "reflection_hints": [],
-    }, ensure_ascii=False)
+    return json.dumps(
+        {
+            "summary": "今天群里商量了生日的事",
+            "big_events": [],
+            "interesting": [],
+            "self_interest": [],
+            "promises": [],
+            "plan_candidates": [],
+            "person_updates": [],
+            "reflection_hints": [],
+        },
+        ensure_ascii=False,
+    )
 
 
 def _planner_handler(kwargs):
@@ -84,13 +110,24 @@ def _planner_handler(kwargs):
             return await tools.get_tool(name).run(event, **args)
 
         await call("astrhe_draft_plan", full_text="规划书正文", reflection="今天还行")
-        await call("astrhe_draft_sections",
-                   sections_json=json.dumps({GROUP_UMO: "这个群的段落"}))
-        await call("astrhe_draft_todo", content="零点发祝福",
-                   visible_umos=json.dumps([GROUP_UMO]), due_kind="today")
-        await call("astrhe_draft_alarm", target_umo=GROUP_UMO,
-                   run_at="2099-01-02 12:00",
-                   background="生日", purpose="送祝福", how="发消息")
+        await call(
+            "astrhe_draft_sections",
+            sections_json=json.dumps({GROUP_UMO: "这个群的段落"}),
+        )
+        await call(
+            "astrhe_draft_todo",
+            content="零点发祝福",
+            visible_umos=json.dumps([GROUP_UMO]),
+            due_kind="today",
+        )
+        await call(
+            "astrhe_draft_alarm",
+            target_umo=GROUP_UMO,
+            run_at="2099-01-02 12:00",
+            background="生日",
+            purpose="送祝福",
+            how="发消息",
+        )
         review = await call("astrhe_request_review", focus="全面")
         assert "审稿意见" in review
         commit = await call("astrhe_commit", summary="定了")
@@ -241,7 +278,7 @@ async def _main_review_err(tmp_path):
         ctx.tool_loop_agent.handlers = [
             _make_handler(_reporter_handler),
             planner,
-            _make_handler(lambda kw: "ERR"),  # 审稿的模型请求失败
+            *[_make_handler(lambda kw: "ERR") for _ in range(3)],  # 连续三次失败
         ]
         result = await _build_pipeline(s, ctx, FakeLogger()).run("manual")
         assert result["status"] == "failed"
@@ -260,7 +297,7 @@ async def _main_role_err(tmp_path):
         ctx = FakeContext()
         await _seed_message(s)
         ctx.tool_loop_agent.handlers = [
-            _make_handler(lambda kw: "ERR"),  # 汇报就失败
+            *[_make_handler(lambda kw: "ERR") for _ in range(3)],  # 连续三次失败
         ]
         result = await _build_pipeline(s, ctx, FakeLogger()).run("manual")
         assert result["status"] == "failed"
@@ -343,10 +380,14 @@ async def _main_reporter_failure_cancels(tmp_path):
         # 两个会话：一个汇报失败，一个慢
         await _seed_message(s)
         await s.ledger.add_message(
-            umo="default:FriendMessage:40004", platform_id="default",
-            message_type="FriendMessage", session_id="40004",
-            sender_id="40004", text="私聊消息",
-            ts=utc_now() - 3600, platform_message_id="7002",
+            umo="default:FriendMessage:40004",
+            platform_id="default",
+            message_type="FriendMessage",
+            session_id="40004",
+            sender_id="40004",
+            text="私聊消息",
+            ts=utc_now() - 3600,
+            platform_message_id="7002",
         )
         slow_finished = False
 
@@ -359,7 +400,7 @@ async def _main_reporter_failure_cancels(tmp_path):
             slow_finished = True
             return "{}"
 
-        ctx.tool_loop_agent.handlers = [slow, failing]
+        ctx.tool_loop_agent.handlers = [slow, failing, failing, failing]
         result = await _build_pipeline(s, ctx, FakeLogger()).run("manual")
         assert result["status"] == "failed"
         assert not slow_finished  # 其余子代理被取消

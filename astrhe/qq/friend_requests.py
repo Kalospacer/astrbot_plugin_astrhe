@@ -1,6 +1,6 @@
 """好友申请处理：flag 留存、预期联系人自动同意、可疑申请处理。
 
-哥哥授权：只自动同意「计划中预期的联系人」（persons.expected_friend_until
+维护者授权：只自动同意「计划中预期的联系人」（persons.expected_friend_until
 未过期），其他申请一律不动。
 """
 
@@ -68,14 +68,14 @@ class FriendRequestManager:
             expected_ids = {p["qq"] for p in expected}
             try:
                 doubts = await self.qq.call("get_doubt_friends_add_request", count=50)
-                for item in (doubts or {}).get("requests", []) or (
-                    doubts if isinstance(doubts, list) else []
-                ):
+                for item in doubts if isinstance(doubts, list) else []:
                     uid = str(item.get("user_id", "") or item.get("uin", ""))
                     flag = str(item.get("flag", "") or "")
                     if uid in expected_ids and flag:
                         try:
-                            await self.qq.call("set_doubt_friends_add_request", flag=flag)
+                            await self.qq.call(
+                                "set_doubt_friends_add_request", flag=flag, approve=True
+                            )
                             await self.storage.persons.clear_expected_friend(uid)
                             await self.storage.ledger.log_action(
                                 "approve_doubt_friend", target=uid

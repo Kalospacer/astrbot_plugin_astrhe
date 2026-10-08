@@ -3,7 +3,7 @@
 - 主 agent 通过 astrhe_request_review(focus) 触发；
 - 成功完成（模型没报错）的审稿计入次数：至少 1 次、至多 2 次；
 - 审稿模型请求失败（NightAgentError）：不算次数，但按 2026-10-07 修订，
-  任何夜间 agent 的模型失败都要终止整晚运行，所以异常直接向上抛。
+  连续三次失败后要终止未提交运行，所以异常直接向上抛。
 """
 
 from __future__ import annotations
@@ -25,6 +25,8 @@ class Reviewer:
         persona_prompt: str,
         admins: list[str],
         internal_tools: list,
+        *,
+        time_info="",
     ):
         self.storage = storage
         self.context = context
@@ -32,6 +34,7 @@ class Reviewer:
         self.persona_prompt = persona_prompt
         self.admins = admins
         self.internal_tools = internal_tools
+        self.time_info = time_info
 
     async def review(self, run_id: int, focus: str) -> str:
         """跑一次审稿，把意见写进 reviews 表并返回意见文本。
@@ -45,9 +48,19 @@ class Reviewer:
         drafts = await self.storage.runs.get_drafts(run_id)
         draft_text = self._render_drafts(drafts)
         system = reviewer_prompts.build_reviewer_system(
-            self.persona_prompt, self.admins, focus
+            self.persona_prompt, self.admins, focus, self.time_info
         )
-        prompt = "这是主 agent 写好的草稿，请按审稿清单审查：\n\n" + draft_text
+        reports = await self.storage.runs.get_reports(run_id)
+        summaries = "\n".join(
+            f"{r['umo']}：{json.loads(r['content_json']).get('summary', '') or r['raw_text']}"
+            for r in reports
+        )
+        prompt = (
+            "【今晚会话清单与汇报摘要】\n"
+            + summaries
+            + "\n这是主 agent 写好的草稿，请按审稿清单审查：\n\n"
+            + draft_text
+        )
         text, _ = await run_night_agent(
             self.context,
             umo="",  # 审稿用虚拟会话
@@ -67,5 +80,5 @@ class Reviewer:
         for d in drafts:
             payload = json.loads(d["payload_json"] or "{}")
             text = json.dumps(payload, ensure_ascii=False)
-            lines.append(f"#{d['seq']} [{d['kind']}]\n{text}")
+            lines.append(f"#{d['id']} [{d['kind']}]\n{text}")
         return "\n\n".join(lines) if lines else "（草稿箱是空的）"

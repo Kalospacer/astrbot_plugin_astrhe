@@ -54,18 +54,18 @@ class AlarmsRepo:
         )
 
     async def set_status(
-        self, alarm_id: int, status: str, result_note: str = ""
+        self, alarm_id: int, status: str, result_note: str | None = None
     ) -> None:
         await self.db.execute(
-            "UPDATE alarms SET status=?, result_note=? WHERE id=?",
+            "UPDATE alarms SET status=?, result_note=COALESCE(?, result_note) WHERE id=?",
             (status, result_note, alarm_id),
         )
 
     async def set_status_by_job(
-        self, cron_job_id: str, status: str, result_note: str = ""
+        self, cron_job_id: str, status: str, result_note: str | None = None
     ) -> None:
         await self.db.execute(
-            "UPDATE alarms SET status=?, result_note=? WHERE cron_job_id=?",
+            "UPDATE alarms SET status=?, result_note=COALESCE(?, result_note) WHERE cron_job_id=?",
             (status, result_note, cron_job_id),
         )
 
@@ -89,7 +89,7 @@ class AlarmsRepo:
         """仍在等待执行或执行中的闹钟（对账与注入用）。"""
         return await self.db.fetchall(
             "SELECT * FROM alarms WHERE status IN"
-            " ('scheduled','started','sent','send_failed','manual_run') ORDER BY id ASC"
+            " ('scheduled','fired') OR (cron_expression!='' AND status='done') ORDER BY id ASC"
         )
 
     async def list_alarms(self, limit: int = 200) -> list[dict[str, Any]]:
@@ -122,3 +122,19 @@ class AlarmsRepo:
             params.append(creator_id)
         row = await self.db.fetchone(sql, tuple(params))
         return int(row["c"]) if row else 0
+
+    async def add_event(
+        self, alarm_id: int, kind: str, detail: str = "", ts=None
+    ) -> None:
+        await self.db.execute(
+            "INSERT INTO alarm_events(alarm_id,ts,kind,detail) VALUES(?,?,?,?)",
+            (alarm_id, utc_now() if ts is None else ts, kind, detail),
+        )
+
+    async def events(
+        self, alarm_id: int, start: float = 0, end: float = 1e20
+    ) -> list[dict]:
+        return await self.db.fetchall(
+            "SELECT * FROM alarm_events WHERE alarm_id=? AND ts>=? AND ts<=? ORDER BY ts,id",
+            (alarm_id, start, end),
+        )

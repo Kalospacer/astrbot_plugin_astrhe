@@ -161,7 +161,7 @@ def build_night_toolset(
     excluded: list[str] = []
     for tool in all_tools or []:
         name = getattr(tool, "name", "")
-        if not name or name in internal_names:
+        if not getattr(tool, "active", True) or not name or name in internal_names:
             continue
         if is_blacklisted(name):
             excluded.append(name)

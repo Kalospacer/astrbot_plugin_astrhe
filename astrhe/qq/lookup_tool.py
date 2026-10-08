@@ -40,15 +40,16 @@ class QQLookupTool(_tool_base_class()):  # type: ignore[misc]
 
     qq_client: Any = None
     name: str = TOOL_NAME
-    description: str = (
-        "QQ 查询工具（只读，不会产生任何动作）。可用动作：\n" + _ACTIONS
-    )
+    description: str = "QQ 查询工具（只读，不会产生任何动作）。可用动作：\n" + _ACTIONS
     parameters: dict[str, Any] = field(
         default_factory=lambda: {
             "type": "object",
             "properties": {
                 "action": {"type": "string", "description": "动作名，见工具描述"},
-                "keyword": {"type": "string", "description": "find_member 的昵称或群名片关键词"},
+                "keyword": {
+                    "type": "string",
+                    "description": "find_member 的昵称或群名片关键词",
+                },
                 "group_id": {"type": "string", "description": "群号"},
                 "user_id": {"type": "string", "description": "QQ 号"},
                 "message_id": {"type": "string", "description": "消息 id"},
@@ -67,7 +68,9 @@ class QQLookupTool(_tool_base_class()):  # type: ignore[misc]
     async def _dispatch(self, action: str, **kwargs: Any) -> str:
         qq = self.qq_client
         if action == "find_member":
-            return await self._find_member(kwargs.get("group_id", ""), kwargs.get("keyword", ""))
+            return await self._find_member(
+                kwargs.get("group_id", ""), kwargs.get("keyword", "")
+            )
         if action == "user_info":
             user_id = str(kwargs.get("user_id", ""))
             if not is_valid_qq(user_id):
@@ -79,12 +82,15 @@ class QQLookupTool(_tool_base_class()):  # type: ignore[misc]
             user_id = str(kwargs.get("user_id", ""))
             friends = await qq.friend_ids()
             return (
-                f"QQ {user_id} 是好友" if user_id in friends
+                f"QQ {user_id} 是好友"
+                if user_id in friends
                 else f"QQ {user_id} 不是好友，私聊可能被 QQ 拦截"
             )
         if action == "groups":
             groups = await qq.call("get_group_list")
-            lines = [f"{g.get('group_id')} {g.get('group_name', '')}" for g in groups or []]
+            lines = [
+                f"{g.get('group_id')} {g.get('group_name', '')}" for g in groups or []
+            ]
             return "我所在的群：\n" + ("\n".join(lines) if lines else "（没有群）")
         if action == "group_honor":
             group_id = str(kwargs.get("group_id", ""))
@@ -95,7 +101,11 @@ class QQLookupTool(_tool_base_class()):  # type: ignore[misc]
         if action == "essence":
             group_id = str(kwargs.get("group_id", ""))
             result = await qq.call("get_essence_msg_list", group_id=int(group_id))
-            items = result if isinstance(result, list) else (result or {}).get("msg_list", [])
+            items = (
+                result
+                if isinstance(result, list)
+                else (result or {}).get("msg_list", [])
+            )
             return f"群 {group_id} 精华消息共 {len(items)} 条"
         if action == "get_msg":
             message_id = str(kwargs.get("message_id", ""))
@@ -122,4 +132,4 @@ class QQLookupTool(_tool_base_class()):  # type: ignore[misc]
                 hits.append(f"{m.get('user_id')} 名片「{card}」昵称「{nickname}」")
         if not hits:
             return f"群 {group_id} 里没找到名字含「{keyword}」的人"
-        return "找到这些成员：\n" + "\n".join(hits[:10])
+        return "找到这些成员：\n" + "\n".join(hits)

@@ -109,8 +109,17 @@ def test_streaming_tool_loop_end_to_end():
         provider = FakeStreamProvider()
         # 构造真实的 Context（构造器不做校验，只用我们需要的字段）
         ctx = RealContext(
-            Queue(), {}, None, _ProviderManager(provider), fake.platform_manager,
-            None, None, fake.persona_manager, None, None, fake.cron_manager,
+            Queue(),
+            {},
+            None,
+            _ProviderManager(provider),
+            fake.platform_manager,
+            None,
+            None,
+            fake.persona_manager,
+            None,
+            None,
+            fake.cron_manager,
         )
 
         sink = []
@@ -129,3 +138,67 @@ def test_streaming_tool_loop_end_to_end():
     resp, sink = arun(run())
     assert resp is not None and resp.role == "assistant"
     assert "规划完成" in resp.completion_text
+
+
+def test_real_streaming_retry_keeps_tool_results_without_repeating_tool():
+    async def run():
+        from asyncio import Queue
+        from astrbot.core.star.context import Context as RealContext
+        from astrhe.night.agent_runner import run_night_agent
+
+        calls = []
+
+        class CountingEcho(EchoTool):
+            async def run(self, event, text=""):
+                calls.append(text)
+                return await super().run(event, text)
+
+        class RetryProvider(FakeStreamProvider):
+            async def text_chat_stream(self, **kwargs):
+                if self.rounds == 1:
+                    self.rounds += 1
+                    raise RuntimeError("请求暂时失败")
+                if self.rounds == 2:
+                    self.rounds += 1
+                    history = [
+                        m.model_dump() if hasattr(m, "model_dump") else m
+                        for m in kwargs.get("contexts", [])
+                    ]
+                    assert any(m.get("role") == "tool" for m in history), history
+                    assert sum(m.get("role") == "system" for m in history) <= 1
+                    yield LLMResponse(
+                        role="assistant",
+                        result_chain=MessageChain().message("续跑完成"),
+                    )
+                    return
+                async for value in super().text_chat_stream(**kwargs):
+                    yield value
+
+        fake = FakeContext()
+        provider = RetryProvider()
+        ctx = RealContext(
+            Queue(),
+            {},
+            None,
+            _ProviderManager(provider),
+            fake.platform_manager,
+            None,
+            None,
+            fake.persona_manager,
+            None,
+            None,
+            fake.cron_manager,
+        )
+        text, history = await run_night_agent(
+            ctx,
+            umo="",
+            provider_id="fake-stream",
+            system_prompt="人格和规则",
+            prompt="执行一次工具",
+            tools=[CountingEcho()],
+        )
+        assert text == "续跑完成" and calls == ["夜间你好"]
+        assert not any(m["role"] == "system" for m in history)
+        assert not fake.sent_messages
+
+    arun(run())

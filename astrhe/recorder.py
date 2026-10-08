@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from .platform import build_umo, normalize_session_id
+from .timeutil import utc_now
 from .storage import Storage
 
 #: notice 事件分类映射：(notice_type, sub_type) -> kind
@@ -105,7 +106,9 @@ class Recorder:
             if not text:
                 return
             obj = event.message_obj
-            message_type = obj.type.value if hasattr(obj.type, "value") else str(obj.type)
+            message_type = (
+                obj.type.value if hasattr(obj.type, "value") else str(obj.type)
+            )
             session_id = normalize_session_id(message_type, str(obj.session_id))
             await self.storage.ledger.add_message(
                 umo=build_umo(event.get_platform_id(), message_type, session_id),
@@ -116,7 +119,7 @@ class Recorder:
                 sender_name="",
                 sender_card="",
                 text=text,
-                ts=float(obj.timestamp),
+                ts=utc_now(),
                 platform_message_id=None,
                 is_bot=True,
                 source="live",
@@ -174,12 +177,22 @@ class Recorder:
             umo = build_umo(event.get_platform_id(), "GroupMessage", group_id)
         else:
             umo = build_umo(
-                event.get_platform_id(), "FriendMessage", user_id or str(event.get_sender_id())
+                event.get_platform_id(),
+                "FriendMessage",
+                user_id or str(event.get_sender_id()),
             )
         # detail 只留少量字段，避免把大对象塞进账本
         detail = {
             k: raw.get(k)
-            for k in ("notice_type", "sub_type", "operator_id", "likes", "is_add", "card_new", "honor_type")
+            for k in (
+                "notice_type",
+                "sub_type",
+                "operator_id",
+                "likes",
+                "is_add",
+                "card_new",
+                "honor_type",
+            )
             if raw.get(k) is not None
         }
         await self.storage.ledger.add_notice(

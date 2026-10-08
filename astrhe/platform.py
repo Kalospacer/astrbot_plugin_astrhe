@@ -52,6 +52,34 @@ def is_valid_qq(value: str) -> bool:
     return bool(_QQ_ID_PATTERN.match(value or ""))
 
 
+def event_umo(event: Any) -> str:
+    """白天所有入口统一按群号定位，兼容 AstrBot 会话隔离。"""
+    pid, kind, sid = parse_umo(getattr(event, "unified_msg_origin", ""))
+    return build_umo(pid, kind, sid) if pid and kind and sid else ""
+
+
+def resolve_session_ref(ref: str, platform_id: str) -> str:
+    """接受会话简写或完整 UMO，返回规范 UMO；错误当场反馈给模型。"""
+    text = str(ref or "").strip()
+    if text.count(":") == 1:
+        kind, sid = text.split(":", 1)
+        types = {
+            "group": "GroupMessage",
+            "群": "GroupMessage",
+            "private": "FriendMessage",
+            "私聊": "FriendMessage",
+        }
+        pid, kind = platform_id, types.get(kind, "")
+    else:
+        pid, kind, sid = parse_umo(text)
+    sid = normalize_session_id(kind, sid)
+    if not pid or kind not in ("GroupMessage", "FriendMessage") or not is_valid_qq(sid):
+        raise ValueError("会话格式不正确，请用 group:群号、private:QQ号 或完整 UMO")
+    if platform_id and pid != platform_id:
+        raise ValueError("目标不是当前 aiocqhttp 平台的会话")
+    return build_umo(pid, kind, sid)
+
+
 class PlatformHelper:
     """从 context 取 aiocqhttp 适配器与 client；所有 QQ 接口调用走这里。"""
 

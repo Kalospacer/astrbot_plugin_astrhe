@@ -3,7 +3,7 @@
 - 记录预渲染成紧凑文本行，已撤回消息在代码里剔除（工具与 prompt 都看不到）。
 - 不超过 300 条的会话一次读完；超过的切块，每块一个子代理，再一次合并调用。
 - 子代理并发 3；JSON 解析失败追问一次；仍失败保存原文并在运行记录标注。
-- 任何一次模型请求失败（NightAgentError）直接向上抛，整晚终止。
+- 连续三次模型请求失败（NightAgentError）向上抛，未提交的整晚终止。
 """
 
 from __future__ import annotations
@@ -15,11 +15,19 @@ from typing import Any
 from .. import constants as C
 from ..prompts import reporter as reporter_prompts
 from ..tools.reader_tools import format_message_line
+from ..timeutil import local_datetime_str
+from ..platform import parse_umo
 from .agent_runner import run_night_agent
 
 REPORT_JSON_KEYS = (
-    "summary", "big_events", "interesting", "self_interest",
-    "promises", "plan_candidates", "person_updates", "reflection_hints",
+    "summary",
+    "big_events",
+    "interesting",
+    "self_interest",
+    "promises",
+    "plan_candidates",
+    "person_updates",
+    "reflection_hints",
 )
 
 FIX_JSON_PROMPT = (
@@ -62,6 +70,9 @@ class Reporter:
         persona_prompt: str,
         tz: Any,
         internal_tools: list,
+        *,
+        time_info="",
+        admins=None,
     ):
         self.storage = storage
         self.context = context
@@ -69,6 +80,8 @@ class Reporter:
         self.persona_prompt = persona_prompt
         self.tz = tz
         self.internal_tools = internal_tools
+        self.time_info = time_info
+        self.admins = admins or []
         self._semaphore = asyncio.Semaphore(C.REPORT_CONCURRENCY)
 
     async def report_session(
@@ -79,9 +92,17 @@ class Reporter:
         lines = [format_message_line(r, self.tz) for r in rows]
         notices = await self.storage.ledger.get_notices(umo, window_start, window_end)
         for n in notices:
-            lines.append(f"[通知] {n['kind']} actor={n['actor_id']} target={n['target_id']}")
+            lines.append(
+                f"[{local_datetime_str(n['ts'], self.tz)}] [通知] {n['kind']} actor={n['actor_id']} target={n['target_id']}"
+            )
         if not lines:
-            return {"umo": umo, "report": {}, "parse_ok": True, "raw": "（窗口内无记录）", "skipped": True}
+            return {
+                "umo": umo,
+                "report": {},
+                "parse_ok": True,
+                "raw": "（窗口内无记录）",
+                "skipped": True,
+            }
 
         chunks = [
             lines[i : i + C.REPORT_CHUNK_SIZE]
@@ -89,7 +110,30 @@ class Reporter:
         ]
         participants = sorted({r["sender_id"] for r in rows if not r["is_bot"]})
         persons_brief = await self._persons_brief(participants)
-        system = reporter_prompts.build_reporter_system(self.persona_prompt, persons_brief)
+        _, kind, sid = parse_umo(umo)
+        self_id = next((r["sender_id"] for r in rows if r["is_bot"]), "")
+        if not self_id:
+            try:
+                from ..platform import PlatformHelper
+                from astrbot.api import logger
+
+                self_id = str(
+                    (
+                        await PlatformHelper(self.context, logger).call_action(
+                            "get_login_info"
+                        )
+                    )["user_id"]
+                )
+            except Exception:
+                pass
+        system = reporter_prompts.build_reporter_system(
+            self.persona_prompt,
+            persons_brief,
+            time_info=self.time_info,
+            session=f"{'群聊' if kind == 'GroupMessage' else '私聊'} {sid}（{umo}）",
+            self_id=self_id,
+            admins=self.admins,
+        )
 
         async with self._semaphore:
             if len(chunks) == 1:
@@ -101,7 +145,9 @@ class Reporter:
             else:
                 partials = []
                 for idx, chunk in enumerate(chunks, 1):
-                    partials.append(await self._report_chunk(umo, chunk, system, idx, len(chunks)))
+                    partials.append(
+                        await self._report_chunk(umo, chunk, system, idx, len(chunks))
+                    )
                 merge_prompt = reporter_prompts.build_merge_prompt(partials)
                 raw, _ = await run_night_agent(
                     self.context,
@@ -119,8 +165,11 @@ class Reporter:
                         report = parse_report_json(raw)
 
         await self.storage.runs.add_report(
-            run_id=run_id, umo=umo, chunk_index=0,
-            content=report or {}, raw_text=raw,
+            run_id=run_id,
+            umo=umo,
+            chunk_index=0,
+            content=report or {},
+            raw_text=raw,
         )
         return {
             "umo": umo,
@@ -153,7 +202,10 @@ class Reporter:
             umo=umo,
             provider_id=self.provider_id,
             system_prompt=system,
-            prompt="这是会话 " + umo + " 的聊天记录，请输出 JSON 汇报。\n\n" + "\n".join(lines),
+            prompt="这是会话 "
+            + umo
+            + " 的聊天记录，请输出 JSON 汇报。\n\n"
+            + "\n".join(lines),
             tools=self.internal_tools,
         )
         # 追问：带着上一轮上下文再要一次合法 JSON

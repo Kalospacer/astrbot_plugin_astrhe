@@ -2,7 +2,7 @@
 
 - 时区取 AstrBot 配置 timezone，取不到用系统时区。
 - 下一个 00:00 到来时若上次还在跑，跳过本次触发（不并发）。
-- 启动约 2 分钟后检查：距上次成功提交超过 24 小时就补跑一次。
+- 启动约 2 分钟后检查：当前本地日期还没有成功提交就补跑一次。
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import asyncio
 from typing import Any
 
 from . import constants as C
-from .timeutil import next_midnight_ts, utc_now
+from .timeutil import local_date_str, next_midnight_ts, utc_now
 
 
 class NightScheduler:
@@ -42,7 +42,9 @@ class NightScheduler:
         if self._running_task is not None and not self._running_task.done():
             self._running_task.cancel()
             try:
-                await self._running_task
+                await asyncio.wait({self._running_task})
+                if not self._running_task.cancelled():
+                    self._running_task.result()
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
             self._running_task = None
@@ -83,7 +85,9 @@ class NightScheduler:
                 continue
             try:
                 self._running_task = asyncio.ensure_future(self._run_callback("auto"))
-                await self._running_task
+                await asyncio.wait({self._running_task})
+                if not self._running_task.cancelled():
+                    self._running_task.result()
             except asyncio.CancelledError:
                 return
             except Exception as exc:  # noqa: BLE001
@@ -106,10 +110,9 @@ class NightScheduler:
                 await self.storage.runs.finish_run(
                     run["id"], "failed", error="进程重启，运行中断"
                 )
-            last = await self.storage.runs.latest_committed_run()
-            if last is None or utc_now() - float(last["ended_at"] or 0) > (
-                C.MISSED_RUN_THRESHOLD_SECONDS
-            ):
+            today = local_date_str(utc_now(), self._tz_getter())
+            last = await self.storage.runs.committed_run_for_date(today)
+            if last is None:
                 self.logger.info("[AstrHe] 检测到漏跑，补跑一次夜间复盘")
                 self._running_task = asyncio.ensure_future(self._run_callback("auto"))
         except Exception as exc:  # noqa: BLE001

@@ -14,11 +14,10 @@ from datetime import datetime
 from typing import Any
 
 from .. import constants as C
-from ..platform import build_umo, is_valid_qq, parse_umo
+from ..platform import build_umo, is_valid_qq, event_umo
+from .validation import validate_alarm, validate_alarm_time
 from ..timeutil import (
-    is_quiet_time,
     local_datetime_str,
-    parse_run_at,
     utc_now,
 )
 from .secrecy import filter_secret_text, is_secret_visible_here
@@ -31,6 +30,7 @@ STANDARD_NOTE_SUFFIX = (
     "（即本任务的目标会话）；需要 @ 某人时，在消息里用 mention_user 组件"
     "（mention_user_id=对方 QQ 号）。对方回复时，参考 AstrHe 待办里属于这个会话的内容。"
     "新建或修改定时任务请用 astrhe_schedule，不要用 future_task。"
+    "执行完的总结只写一句『已完成』，不要复述卡片里的内容。"
 )
 
 
@@ -56,6 +56,14 @@ def render_card_note(card: dict[str, Any]) -> str:
     return "\n".join(lines) + STANDARD_NOTE_SUFFIX
 
 
+def alarm_description(card: dict, alarm_id: int) -> str:
+    return (
+        f"AstrHe 闹钟 #{alarm_id}"
+        if card.get("secret_from")
+        else str(card.get("purpose", ""))
+    )
+
+
 class ScheduleToolImpl:
     """astrhe_schedule 的实现。"""
 
@@ -68,6 +76,7 @@ class ScheduleToolImpl:
         tz_getter,
         secrecy_resolver: Any,
         admins_getter,
+        friend_request_manager=None,
     ):
         self.storage = storage
         self.context = context
@@ -76,6 +85,7 @@ class ScheduleToolImpl:
         self._tz_getter = tz_getter
         self.secrecy_resolver = secrecy_resolver
         self._admins_getter = admins_getter
+        self.friend_requests = friend_request_manager
 
     # ---------------- 入口 ----------------
 
@@ -119,7 +129,7 @@ class ScheduleToolImpl:
         current_umo = ""
         try:
             platform_id = event.get_platform_id()
-            current_umo = event.unified_msg_origin
+            current_umo = event_umo(event)
         except Exception:  # noqa: BLE001
             pass
 
@@ -131,46 +141,38 @@ class ScheduleToolImpl:
                 return "只有管理员才能给别的会话定闹钟；给自己所在的会话定用 target_type=current"
             if not is_valid_qq(target_id):
                 return "target_id 需要是群号（5-12 位数字）"
-            target_umo = build_umo(platform_id or self.qq.platform.default_platform_id(), "GroupMessage", target_id)
+            target_umo = build_umo(
+                platform_id or self.qq.platform.default_platform_id(),
+                "GroupMessage",
+                target_id,
+            )
         elif target_type == "private":
             if not is_admin:
                 return "只有管理员才能给别的会话定闹钟；给自己所在的会话定用 target_type=current"
             if not is_valid_qq(target_id):
                 return "target_id 需要是 QQ 号（5-12 位数字）"
-            target_umo = build_umo(platform_id or self.qq.platform.default_platform_id(), "FriendMessage", target_id)
+            target_umo = build_umo(
+                platform_id or self.qq.platform.default_platform_id(),
+                "FriendMessage",
+                target_id,
+            )
         else:
             return "target_type 只能是 current / group / private"
         if not target_umo or target_umo.startswith(":"):
             return "确定不了目标会话，请检查 target_type 和 target_id"
 
-        # 校验平台与目标
-        pid, mtype, sid = parse_umo(target_umo)
-        if self.qq.platform.default_platform_id() == "":
-            return "当前没有 aiocqhttp 平台，定不了闹钟"
-        if mtype == "GroupMessage":
-            groups = await self.qq.group_ids()
-            if groups and sid not in groups:
-                return f"我不在群 {sid} 里，定不了这个闹钟"
-        friend_warning = ""
-        if mtype == "FriendMessage":
-            friends = await self.qq.friend_ids()
-            if friends and sid not in friends:
-                friend_warning = "\n注意：对方不是好友，消息可能被 QQ 拦截"
-
-        # 时间
         run_at_str = str(kwargs.get("run_at", "") or "")
         cron_expression = str(kwargs.get("cron_expression", "") or "")
         tz = self._tz_getter()
-        run_at_ts: float | None = None
-        if run_at_str:
-            try:
-                run_at_ts = parse_run_at(run_at_str, tz)
-            except ValueError as exc:
-                return str(exc)
-            if run_at_ts <= utc_now() + C.ALARM_MIN_LEAD_SECONDS:
-                return "执行时间必须晚于现在 5 分钟以后"
-        elif not cron_expression:
-            return "需要 run_at（一次性，如 2026-10-11 00:00）或 cron_expression（重复）"
+        expect_ids = kwargs.get("expect_friend_ids") or []
+        if expect_ids and not is_admin:
+            return "只有管理员能标记预期联系人"
+        if not isinstance(expect_ids, list) or any(
+            not is_valid_qq(str(q)) for q in expect_ids
+        ):
+            return "expect_friend_ids 必须是 QQ 号数组"
+        if len(set(expect_ids)) > C.EXPECTED_FRIEND_MAX_PER_NIGHT:
+            return "一次最多标记 3 名预期联系人"
 
         # 卡片
         card = {
@@ -194,13 +196,21 @@ class ScheduleToolImpl:
         if isinstance(card["secret_from"], str):
             card["secret_from"] = [card["secret_from"]]
 
-        # 深夜免打扰
-        if run_at_ts is not None and is_quiet_time(run_at_ts, tz):
-            if not (card["agreed"] and card["agreed_reason"]):
-                return (
-                    "这个时间落在深夜免打扰时段（00:30-08:00）。"
-                    "如果是事先约定好的时刻（比如生日零点），请设 agreed=true 并写 agreed_reason"
-                )
+        try:
+            checked, friend_warning = await validate_alarm(
+                {
+                    "target_umo": target_umo,
+                    "run_at": run_at_str,
+                    "cron_expression": cron_expression,
+                    "card": card,
+                },
+                self.qq,
+                tz,
+                allow_repeat=is_admin,
+            )
+        except Exception as exc:
+            return f"闹钟未创建：{exc}"
+        run_at_ts = checked["next_run_at"] if run_at_str else None
 
         # 频率上限
         deny = await self.rate_limiter.check_alarm_creation(
@@ -230,7 +240,7 @@ class ScheduleToolImpl:
                     "origin": "tool",
                     "astrhe_alarm_id": str(alarm_id),
                 },
-                description=card["purpose"][:100],
+                description=alarm_description(card, alarm_id),
                 timezone=getattr(tz, "key", None) or str(tz),
                 run_once=run_at_ts is not None,
                 run_at=datetime.fromtimestamp(run_at_ts, tz) if run_at_ts else None,
@@ -240,9 +250,22 @@ class ScheduleToolImpl:
             return f"创建定时任务失败: {exc}"
         await self.storage.alarms.bind_cron_job(alarm_id, job.job_id)
         when = (
-            local_datetime_str(run_at_ts, tz) if run_at_ts else f"重复规则 {cron_expression}"
+            local_datetime_str(run_at_ts, tz)
+            if run_at_ts
+            else f"重复规则 {cron_expression}"
         )
-        return f"闹钟 #{alarm_id} 定好了：{when} → {target_umo}{friend_warning}"
+        followup = []
+        for qq in set(map(str, expect_ids)):
+            await self.storage.persons.set_expected_friend(
+                qq, utc_now() + C.EXPECTED_FRIEND_TTL_SECONDS, card["purpose"]
+            )
+        if expect_ids and self.friend_requests is not None:
+            followup = await self.friend_requests.nightly_followup()
+        return (
+            f"闹钟 #{alarm_id} 定好了：{when} → {target_umo}"
+            + (f"；注意：{friend_warning}" if friend_warning else "")
+            + ("\n" + "\n".join(followup) if followup else "")
+        )
 
     # ---------------- list ----------------
 
@@ -250,11 +273,15 @@ class ScheduleToolImpl:
         sender_id, is_admin = self._caller(event)
         current_umo = ""
         try:
-            current_umo = event.unified_msg_origin
+            current_umo = event_umo(event)
         except Exception:  # noqa: BLE001
             pass
         viewer_id = sender_id if not self._is_cron_event(event) else ""
-        present = await self.secrecy_resolver.present_ids(current_umo) if current_umo else set()
+        present = (
+            await self.secrecy_resolver.present_ids(current_umo)
+            if current_umo
+            else set()
+        )
         tz = self._tz_getter()
 
         lines: list[str] = []
@@ -265,11 +292,16 @@ class ScheduleToolImpl:
             card = json.loads(a["card_json"] or "{}")
             secret_from = card.get("secret_from") or []
             if not is_secret_visible_here(
-                secret_from, viewer_id=viewer_id, session_umo=current_umo, present_ids=present
+                secret_from,
+                viewer_id=viewer_id,
+                session_umo=current_umo,
+                present_ids=present,
             ):
                 continue
             when = (
-                local_datetime_str(a["run_at"], tz) if a["run_at"] else a["cron_expression"]
+                local_datetime_str(a["run_at"], tz)
+                if a["run_at"]
+                else a["cron_expression"]
             )
             purpose = filter_secret_text(
                 str(card.get("purpose", "")),
@@ -277,7 +309,9 @@ class ScheduleToolImpl:
                 session_umo=current_umo,
                 present_ids=present,
             )
-            lines.append(f"#{a['id']} [{a['status']}] {when} → {a['target_umo']}：{purpose}")
+            lines.append(
+                f"#{a['id']} [{a['status']}] {when} → {a['target_umo']}：{purpose}"
+            )
 
         if is_admin:
             cron = getattr(self.context, "cron_manager", None)
@@ -323,6 +357,8 @@ class ScheduleToolImpl:
         for key in ("background", "purpose", "how", "taboo", "agreed_reason"):
             if kwargs.get(key):
                 card[key] = str(kwargs[key])
+        if "agreed" in kwargs:
+            card["agreed"] = bool(kwargs["agreed"])
         for key in ("involved", "mentions", "secret_from"):
             if kwargs.get(key):
                 value = kwargs[key]
@@ -332,7 +368,7 @@ class ScheduleToolImpl:
         tz = self._tz_getter()
         if run_at_str:
             try:
-                run_at_ts = parse_run_at(run_at_str, tz)
+                run_at_ts = validate_alarm_time(run_at_str, "", card, tz)
             except ValueError as exc:
                 return str(exc)
             if run_at_ts <= utc_now() + C.ALARM_MIN_LEAD_SECONDS:
@@ -351,7 +387,7 @@ class ScheduleToolImpl:
                             "origin": "tool",
                             "astrhe_alarm_id": str(alarm_id),
                         },
-                        description=str(card.get("purpose", ""))[:100],
+                        description=alarm_description(card, alarm_id),
                         timezone=getattr(tz, "key", None) or str(tz),
                         run_once=True,
                         run_at=datetime.fromtimestamp(run_at_ts, tz),
@@ -359,22 +395,38 @@ class ScheduleToolImpl:
                     await self.storage.alarms.bind_cron_job(alarm_id, job.job_id)
                 except Exception as exc:  # noqa: BLE001
                     return f"修改定时任务失败: {exc}"
+        if not run_at_str and alarm["cron_expression"]:
+            try:
+                validate_alarm_time(
+                    "", alarm["cron_expression"], card, tz, allow_repeat=is_admin
+                )
+            except ValueError as exc:
+                return str(exc)
         # 更新卡片与 note
         await self.storage.db.execute(
             "UPDATE alarms SET card_json=?, note_text=?, run_at=COALESCE(?, run_at)"
             " WHERE id=?",
-            (json.dumps(card, ensure_ascii=False), note_text, updates.get("run_at"), alarm_id),
+            (
+                json.dumps(card, ensure_ascii=False),
+                note_text,
+                updates.get("run_at"),
+                alarm_id,
+            ),
         )
         if alarm["cron_job_id"] and not run_at_str:
             # 只改卡片：同步更新 cron 任务里的 note
             try:
                 job_list = await self.context.cron_manager.list_jobs("active_agent")
-                job = next((j for j in job_list if j.job_id == alarm["cron_job_id"]), None)
+                job = next(
+                    (j for j in job_list if j.job_id == alarm["cron_job_id"]), None
+                )
                 if job is not None:
                     payload = dict(job.payload or {})
                     payload["note"] = note_text
                     await self.context.cron_manager.update_job(
-                        alarm["cron_job_id"], payload=payload, description=str(card.get("purpose", ""))[:100]
+                        alarm["cron_job_id"],
+                        payload=payload,
+                        description=alarm_description(card, alarm_id),
                     )
             except Exception:  # noqa: BLE001
                 pass
@@ -417,7 +469,7 @@ class ScheduleToolImpl:
             return ""
         current_umo = ""
         try:
-            current_umo = event.unified_msg_origin
+            current_umo = event_umo(event)
         except Exception:  # noqa: BLE001
             pass
         if alarm["target_umo"] != current_umo:

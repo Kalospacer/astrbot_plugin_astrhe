@@ -3,9 +3,8 @@
 本文件集中存放第一版的所有默认值（对应计划 2.4 节）与工具黑名单。
 这些值刻意不做成设置项；调整时改这里并补测试。
 
-注意（2026-10-07 修订）：夜间 agent 的工作不设任何时长、步数、数据量上限，
-唯一的停止条件是模型请求失败（provider 自身超时或报错）。原因：插件开源后
-不同用户的规模与模型速度差别很大，任何写死的时长都不合适。
+夜间不设时长、步数、复盘窗口数据量上限；连续三次模型请求失败才终止。
+模型与外部工具的单次超时使用 AstrBot 自己的设置。
 """
 
 from __future__ import annotations
@@ -21,10 +20,7 @@ NIGHT_RUN_MINUTE = 0
 #: 启动后多少秒检查漏跑
 MISSED_RUN_CHECK_DELAY_SECONDS = 120
 
-#: 距上次成功提交超过该秒数即视为漏跑，启动后补跑一次
-MISSED_RUN_THRESHOLD_SECONDS = 24 * 3600
-
-#: 冷启动（账本为空）时回溯秒数
+#: 冷启动（尚未成功提交过）时回溯秒数
 COLD_START_SECONDS = 72 * 3600
 
 #: 补拉单页大小
@@ -60,8 +56,9 @@ UNLIMITED_SECONDS = 10**9
 #: 外部工具超时只返回文字说明给模型，不终止当晚运行。
 EXTERNAL_TOOL_TIMEOUT_DEFAULT = 120
 
-#: 白天注入总长度上限（字符）
-INJECT_MAX_CHARS = 600
+#: 连续模型请求失败达到三次才放弃；成功过一轮即重新计数。
+NIGHT_MAX_CONSECUTIVE_FAILURES = 3
+NIGHT_RETRY_DELAY_SECONDS = 30
 
 #: 纪念日前瞻天数
 ANNIVERSARY_LOOKAHEAD_DAYS = 14
@@ -72,9 +69,6 @@ EXPECTED_FRIEND_MAX_PER_NIGHT = 3
 
 #: 闹钟 run_at 必须晚于「现在 + 该秒数」
 ALARM_MIN_LEAD_SECONDS = 5 * 60
-
-#: bot 消息匹配合并的时间容差（秒）
-BOT_MESSAGE_MERGE_TOLERANCE = 120
 
 # ---------------------------------------------------------------------------
 # 频率上限

@@ -15,10 +15,36 @@ from ..platform import parse_umo
 from ..timeutil import utc_now
 
 _SECRET_BLOCK = re.compile(
-    re.escape(C.SECRET_MARK_OPEN_PREFIX) + r"([^】]*)】.*?" + re.escape(C.SECRET_MARK_CLOSE),
+    r"【保密[:：]\s*([^】]*)】.*?" + re.escape(C.SECRET_MARK_CLOSE),
     re.DOTALL,
 )
 SECRET_PLACEHOLDER = "（保密内容）"
+
+
+def secret_ids(text: str) -> set[str]:
+    return {
+        qq
+        for m in _SECRET_BLOCK.finditer(text or "")
+        for qq in parse_secret_mark(m.group(1))
+    }
+
+
+def normalize_secret_text(text: str) -> str:
+    """规范标记；残缺或无法识别的保密标记拒绝入草稿。"""
+    if not isinstance(text, str):
+        raise ValueError("段落需要是文本")
+    for match in _SECRET_BLOCK.finditer(text):
+        ids = parse_secret_mark(match.group(1))
+        if not ids or not all(q.isdigit() for q in ids):
+            raise ValueError("保密标记需填写 QQ 号：【保密:QQ号】内容【/保密】")
+    remainder = _SECRET_BLOCK.sub("", text)
+    if "【保密" in remainder or "【/保密" in remainder:
+        raise ValueError("保密标记不完整，请用【保密:QQ号】内容【/保密】")
+    return re.sub(
+        r"【保密[:：]\s*([^】]*)】",
+        lambda m: "【保密:" + ",".join(parse_secret_mark(m.group(1))) + "】",
+        text,
+    )
 
 
 def parse_secret_mark(mark_content: str) -> list[str]:

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .tools.validation import validate_anniversaries
 from .timeutil import local_datetime_str, utc_now
 
 try:
@@ -33,7 +34,12 @@ class WebApi:
         if not callable(register):
             return
         routes = [
-            ("/overview", self._overview, ["GET"], "总览：运行、规划、待办、闹钟、关系本、承诺"),
+            (
+                "/overview",
+                self._overview,
+                ["GET"],
+                "总览：运行、规划、待办、闹钟、关系本、承诺",
+            ),
             ("/runs", self._runs, ["GET"], "运行记录"),
             ("/run_detail", self._run_detail, ["GET"], "单次运行详情（汇报、审稿）"),
             ("/todo/delete", self._todo_delete, ["POST"], "删除待办"),
@@ -65,16 +71,28 @@ class WebApi:
                         "plan_date": latest_plan["plan_date"],
                         "full_text": latest_plan["full_text"],
                         "reflection": latest_plan["reflection"],
-                        "sections": await self.storage.plans.get_sections(latest_plan["id"]),
+                        "sections": await self.storage.plans.get_sections(
+                            latest_plan["id"]
+                        ),
                     }
                     if latest_plan
                     else None
                 ),
                 "plans": await self.storage.plans.list_plans(30),
-                "todos": [self._json_fields(t, ("visible_umos_json", "secret_from_json", "evidence_json")) for t in todos],
+                "todos": [
+                    self._json_fields(
+                        t, ("visible_umos_json", "secret_from_json", "evidence_json")
+                    )
+                    for t in todos
+                ],
                 "alarms": [self._json_fields(a, ("card_json",)) for a in alarms],
-                "persons": [self._json_fields(p, ("aliases_json", "anniversaries_json")) for p in persons],
-                "promises": [self._json_fields(p, ("evidence_json",)) for p in promises],
+                "persons": [
+                    self._json_fields(p, ("aliases_json", "anniversaries_json"))
+                    for p in persons
+                ],
+                "promises": [
+                    self._json_fields(p, ("evidence_json",)) for p in promises
+                ],
             }
         )
 
@@ -89,7 +107,7 @@ class WebApi:
             return astrbot_web.error_response("run_id 不合法", status_code=400)
         reports = await self.storage.runs.get_reports(run_id)
         reviews = await self.storage.runs.get_reviews(run_id)
-        drafts = await self.storage.runs.get_drafts(run_id)
+        drafts = await self.storage.runs.get_drafts(run_id, None)
         return astrbot_web.json_response(
             {"reports": reports, "reviews": reviews, "drafts": drafts}
         )
@@ -126,7 +144,14 @@ class WebApi:
             try:
                 anniversaries = json.loads(anniversaries)
             except (ValueError, TypeError):
-                anniversaries = None
+                return astrbot_web.error_response(
+                    "纪念日不是合法 JSON 数组", status_code=400
+                )
+        if "anniversaries" in payload:
+            try:
+                validate_anniversaries(anniversaries)
+            except ValueError as exc:
+                return astrbot_web.error_response(str(exc), status_code=400)
         aliases = payload.get("aliases")
         if isinstance(aliases, str):
             try:

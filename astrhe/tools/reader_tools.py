@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from .. import constants as C
-from ..platform import parse_umo
+from ..platform import parse_umo, event_umo
 from ..timeutil import local_datetime_str
 from .base import AstrHeFunctionTool
 from .secrecy import filter_secret_text
@@ -22,7 +22,7 @@ def format_message_line(row: dict, tz) -> str:
     text = (row["text"] or "").replace("\n", " ")
     mid = row["platform_message_id"] or f"local-{row['id']}"
     prefix = "[我] " if row["is_bot"] else ""
-    return f"[{dt.strftime('%H:%M')}] {prefix}{name}({row['sender_id']}): {text}  #{mid}"
+    return f"[{dt.strftime('%m-%d %H:%M')}] {prefix}{name}({row['sender_id']}): {text}  #{mid}"
 
 
 class ReaderTools:
@@ -35,18 +35,25 @@ class ReaderTools:
         tz_getter,
         window_getter,
         secrecy_resolver: Any = None,
+        run_id: int | None = None,
     ):
         self.storage = storage
         self.context = context
         self._tz_getter = tz_getter
         self._window_getter = window_getter
         self.secrecy_resolver = secrecy_resolver
+        self.run_id = run_id
 
     def _tz(self):
         return self._tz_getter()
 
     def build(self) -> list[AstrHeFunctionTool]:
         return [
+            AstrHeFunctionTool(
+                name="astrhe_read_reports",
+                description="完整读取今晚各会话汇报，审稿核对用。",
+                fn=self._read_reports,
+            ),
             AstrHeFunctionTool(
                 name="astrhe_list_sessions",
                 description="列出本次复盘窗口内有记录的会话（群聊和私聊），带消息条数。",
@@ -81,6 +88,7 @@ class ReaderTools:
                 parameters={
                     "type": "object",
                     "properties": {
+                        "offset": {"type": "integer", "description": "搜索翻页偏移"},
                         "keyword": {"type": "string"},
                         "umo": {"type": "string"},
                     },
@@ -180,19 +188,36 @@ class ReaderTools:
         if not keyword:
             return "需要 keyword 参数"
         rows = await self.storage.ledger.search_messages(
-            keyword, 0, umo=umo or None, limit=50
+            keyword,
+            0,
+            umo=umo or None,
+            limit=51,
+            offset=max(0, int(kwargs.get("offset", 0))),
         )
         if not rows:
             return f"没有找到含「{keyword}」的消息"
         tz = self._tz()
+        more = len(rows) > 50
+        rows = rows[:50]
         lines = [f"{r['umo']} " + format_message_line(r, tz) for r in rows]
-        return f"找到 {len(rows)} 条：\n" + "\n".join(lines)
+        suffix = (
+            f"\n还有更多，继续翻传 offset={max(0, int(kwargs.get('offset', 0))) + 50}"
+            if more
+            else ""
+        )
+        return f"找到 {len(rows)} 条：\n" + "\n".join(lines) + suffix
 
     async def _message_context(
         self, event: Any, message_id: str = "", **kwargs: Any
     ) -> str:
-        row = await self.storage.ledger.get_message_by_platform_id(str(message_id))
-        if not row:
+        mid = str(message_id).lstrip("#")
+        if mid.startswith("local-") and mid[6:].isdigit():
+            row = await self.storage.db.fetchone(
+                "SELECT * FROM messages WHERE id=? AND recalled=0", (int(mid[6:]),)
+            )
+        else:
+            row = await self.storage.ledger.get_message_by_platform_id(mid)
+        if not row or row["recalled"]:
             return "账本里找不到这条消息"
         rows = await self.storage.ledger.get_message_context(row["umo"], row["ts"])
         tz = self._tz()
@@ -218,19 +243,19 @@ class ReaderTools:
         include_done = bool(kwargs.get("include_done"))
         rows = await self.storage.plans.open_todos()
         if include_done:
-            rows = await self.storage.plans.list_todos(100)
+            rows = await self.storage.plans.list_todos(-1)
         if not rows:
             return "没有待办"
         lines = []
         for r in rows:
             lines.append(
                 f"#{r['id']} [{r['status']}] {r['content']}"
-                f"（{r['due_kind']} {r['due_date']}，可见于 {r['visible_umos_json']}）"
+                f"（{r['due_kind']} {r['due_date']}，可见于 {r['visible_umos_json']}；备注：{r['note']}）"
             )
         return "待办列表：\n" + "\n".join(lines)
 
     async def _read_promises(self, event: Any, **kwargs: Any) -> str:
-        rows = await self.storage.plans.list_promises(100)
+        rows = await self.storage.plans.list_promises(-1)
         if not rows:
             return "承诺账本是空的"
         lines = [
@@ -241,18 +266,18 @@ class ReaderTools:
         return "承诺账本：\n" + "\n".join(lines)
 
     async def _read_alarms(self, event: Any, **kwargs: Any) -> str:
-        alarms = await self.storage.alarms.list_alarms(50)
+        alarms = await self.storage.alarms.list_alarms(-1)
         lines = []
         if alarms:
             lines.append("AstrHe 建的闹钟：")
             for a in alarms:
                 run_at = a["run_at"]
                 when = (
-                    local_datetime_str(run_at, self._tz()) if run_at else a["cron_expression"]
+                    local_datetime_str(run_at, self._tz())
+                    if run_at
+                    else a["cron_expression"]
                 )
-                lines.append(
-                    f"#{a['id']} [{a['status']}] → {a['target_umo']} @ {when}"
-                )
+                lines.append(f"#{a['id']} [{a['status']}] → {a['target_umo']} @ {when}")
         # 全部唤醒任务（含外部建的），用于查重
         cron = getattr(self.context, "cron_manager", None)
         if cron is not None:
@@ -286,7 +311,7 @@ class ReaderTools:
         umo = ""
         try:
             viewer_id = str(event.get_sender_id())
-            umo = event.unified_msg_origin
+            umo = event_umo(event)
         except Exception:  # noqa: BLE001
             pass
         if umo and self.secrecy_resolver is not None:
@@ -295,3 +320,12 @@ class ReaderTools:
                 text, viewer_id=viewer_id, session_umo=umo, present_ids=present
             )
         return f"规划书（{plan['plan_date']}）：\n{text}"
+
+    async def _read_reports(self, event: Any, **kwargs) -> str:
+        if self.run_id is None:
+            return "当前没有夜间运行"
+        reports = await self.storage.runs.get_reports(self.run_id)
+        return (
+            "\n\n".join(f"{r['umo']}\n{r['raw_text']}" for r in reports)
+            or "今晚还没有汇报"
+        )

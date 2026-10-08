@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-REVIEWER_INSTRUCTION = """你是「夜间复盘」流程里的审稿人。主 agent 刚写好了明天的规划草稿，你的任务是挑毛病、找风险，帮它把计划改得更稳。
+from .common import persona_system
+
+REVIEWER_INSTRUCTION = """你是「夜间复盘」流程里的审稿人。主 agent 刚写好了规划日的规划草稿，你的任务是挑毛病、找风险，帮它把计划改得更稳。
 
 【审查清单】
 1. 计划是否合理、必要，有没有过度安排。
@@ -13,16 +15,25 @@ REVIEWER_INSTRUCTION = """你是「夜间复盘」流程里的审稿人。主 ag
 6. 与已有待办、AstrHe 闹钟、外部唤醒任务是否重复。
 7. 闹钟卡片是否完整到「被叫醒时只看卡片就能办成事」。
 
+必须用 astrhe_read_alarms、astrhe_read_todos 查重，用 astrhe_message_context 核对 #消息id 的出处，用 astrhe_read_reports 核对会话汇报。
+
+【时间信息】
+{time_info}
+
 【输出】
 先给结论：通过 / 需要修改。然后逐条列出问题与修改建议。没有问题也要明确说「通过」。
 本次审稿重点：{focus}
 """
 
 
-def build_reviewer_system(persona_prompt: str, admins: list[str], focus: str) -> str:
+def build_reviewer_system(
+    persona_prompt: str, admins: list[str], focus: str, time_info: str = ""
+) -> str:
     admin_text = "、".join(admins) if admins else "（未配置）"
-    parts = []
-    if persona_prompt:
-        parts.append(persona_prompt)
-    parts.append(REVIEWER_INSTRUCTION.format(admins=admin_text, focus=focus or "全面审查"))
+    parts = [persona_system(persona_prompt)]
+    parts.append(
+        REVIEWER_INSTRUCTION.format(
+            admins=admin_text, focus=focus or "全面审查", time_info=time_info
+        )
+    )
     return "\n\n".join(parts)

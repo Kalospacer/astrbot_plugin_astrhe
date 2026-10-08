@@ -1,16 +1,13 @@
 """闹钟跟踪与对账。
 
-- 唤醒钩子：on_agent_begin → started；on_llm_tool_respond 里看
-  send_message_to_user 的结果文字 → sent / send_failed；on_agent_done → done。
-- 「有 started 没有 done」（on_agent_done 只在正常结束时触发）→ failed。
-- 立即执行识别：cron_job.run_started_at 比 payload.run_at 早 5 分钟以上，
-  视为面板「立即执行」：标记 manual_run，并对 run_once 任务 update_job
-  enabled=False，防止原定时间再跑一次。
-- 夜间对账：run_at 已过、cron 行不存在、也没有 started 记录的 → missing。
+- 生命周期与发送结果分离：fired/done 状态，send_ok/send_failed 事件。
+- 手动提前执行记 manual_run 事件，并停用一次性任务避免重复触发。
+- 完整回流窗口内的执行、发送失败、缺失和中断；触发一小时内不判中断。
 """
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any
 
@@ -58,17 +55,19 @@ class AlarmTracker:
             try:
                 started_ts = datetime.fromisoformat(run_started_at).timestamp()
                 if started_ts < float(run_at) - MANUAL_RUN_TOLERANCE:
-                    await self.storage.alarms.set_status(alarm["id"], "manual_run")
+                    await self.storage.alarms.add_event(alarm["id"], "manual_run")
+                    await self.storage.alarms.set_status(alarm["id"], "fired")
                     await self._disable_run_once(alarm)
                     return
             except (ValueError, TypeError):
                 pass
-        await self.storage.alarms.set_status(alarm["id"], "started")
+        await self.storage.alarms.add_event(alarm["id"], "fired")
+        await self.storage.alarms.set_status(alarm["id"], "fired")
 
     async def on_llm_tool_respond(
         self, event: Any, tool: Any, tool_args: Any, tool_result: Any
     ) -> None:
-        """看 send_message_to_user 的结果文字，标记 sent / send_failed。"""
+        """记录 send_message_to_user 的独立发送结果，不覆盖生命周期。"""
         alarm_id = self._alarm_id_from_event(event)
         if not alarm_id:
             return
@@ -84,9 +83,15 @@ class AlarmTracker:
         if alarm is None:
             return
         if _SEND_OK_PREFIX in text:
-            await self.storage.alarms.set_status(alarm["id"], "sent")
+            await self.storage.alarms.add_event(
+                alarm["id"], "send_ok", json.dumps(tool_args, ensure_ascii=False)
+            )
         elif "error" in text.lower() or "failed" in text.lower():
-            await self.storage.alarms.set_status(alarm["id"], "send_failed", text[:200])
+            await self.storage.alarms.add_event(
+                alarm["id"],
+                "send_failed",
+                text + "；参数：" + json.dumps(tool_args, ensure_ascii=False),
+            )
 
     async def on_agent_done(self, event: Any) -> None:
         """正常结束 → done。"""
@@ -96,15 +101,20 @@ class AlarmTracker:
         alarm = await self.storage.alarms.get_by_alarm_id_str(alarm_id)
         if alarm is None:
             return
-        if alarm["status"] in ("started", "sent", "send_failed", "manual_run"):
+        if alarm["status"] == "fired":
+            await self.storage.alarms.add_event(alarm["id"], "done")
             await self.storage.alarms.set_status(alarm["id"], "done")
 
     async def finalize_stale_started(self) -> None:
-        """把「started 但没有 done」的闹钟判为 failed（夜间对账时调用）。"""
+        """触发超过一小时仍未正常结束才判中断。"""
         for alarm in await self.storage.alarms.active_alarms():
-            if alarm["status"] == "started":
+            if alarm["status"] != "fired":
+                continue
+            events = await self.storage.alarms.events(alarm["id"])
+            fired = [e for e in events if e["kind"] in ("fired", "manual_run")]
+            if fired and utc_now() - fired[-1]["ts"] > 3600:
                 await self.storage.alarms.set_status(
-                    alarm["id"], "failed", "执行被中断（没有正常结束）"
+                    alarm["id"], "failed", "执行被中断（超过一小时没有正常结束）"
                 )
 
     async def _disable_run_once(self, alarm: dict) -> None:
@@ -120,38 +130,71 @@ class AlarmTracker:
 
     # ---------------- 夜间对账 ----------------
 
-    async def nightly_reconcile(self) -> str:
-        """对账：把失踪的闹钟标记 missing，返回给主 agent 看的文本。"""
+    async def nightly_reconcile(self, window_start=0, window_end=None) -> str:
+        """完整回流窗口内触发或应触发的闹钟，发送结果独立于生命周期。"""
         await self.finalize_stale_started()
-        now = utc_now()
+        now = utc_now() if window_end is None else window_end
         tz = self._tz_getter()
-        cron_jobs: dict[str, Any] = {}
+        cron_jobs = {}
         try:
-            for job in await self.context.cron_manager.list_jobs("active_agent"):
-                cron_jobs[job.job_id] = job
-        except Exception:  # noqa: BLE001
+            cron_jobs = {
+                j.job_id: j
+                for j in await self.context.cron_manager.list_jobs("active_agent")
+            }
+        except Exception:
             pass
-
-        lines: list[str] = []
-        for alarm in await self.storage.alarms.active_alarms():
-            run_at = alarm["run_at"]
-            if run_at is None:
-                continue  # 重复任务不参与失踪判定
-            if float(run_at) > now:
-                continue  # 还没到点
-            status = alarm["status"]
-            if status in ("done", "sent", "send_failed", "manual_run"):
+        lines = []
+        for alarm in await self.storage.alarms.list_alarms(-1):
+            events = await self.storage.alarms.events(alarm["id"], window_start, now)
+            due = alarm["run_at"] is not None and window_start <= alarm["run_at"] <= now
+            # 外部创建失败也要回流，不能等到永远不会发生的 fired 事件。
+            failed = (
+                alarm["status"] == "failed"
+                and window_start <= alarm["created_at"] <= now
+            )
+            if not events and not due and not failed:
                 continue
-            job_missing = alarm["cron_job_id"] and alarm["cron_job_id"] not in cron_jobs
-            if job_missing and status == "scheduled":
-                await self.storage.alarms.set_status(
-                    alarm["id"], "missing", "cron 行不存在，可能被手动删除"
+            all_events = await self.storage.alarms.events(alarm["id"])
+            fired = any(e["kind"] in ("fired", "manual_run") for e in all_events)
+            status = alarm["status"]
+            if due and status == "scheduled" and not fired:
+                job = cron_jobs.get(alarm["cron_job_id"])
+                if job is None or not job.enabled:
+                    status = "missing"
+                    await self.storage.alarms.set_status(
+                        alarm["id"], status, "到点没执行，任务缺失或停用"
+                    )
+            details = []
+            if any(e["kind"] == "manual_run" for e in events):
+                details.append("面板立即执行过")
+            sends = [e for e in events if e["kind"] in ("send_ok", "send_failed")]
+            for e in sends:
+                details.append(
+                    ("消息已发出：" if e["kind"] == "send_ok" else "发送失败：")
+                    + e["detail"]
                 )
-                lines.append(
-                    f"闹钟 #{alarm['id']} → {alarm['target_umo']}"
-                    f"（原定 {local_datetime_str(float(run_at), tz)}）失踪了："
-                    "定时任务行不存在，也没有执行记录。可能是被手动删除，也可能执行失败。"
-                )
-        if not lines:
-            return "对账完成：没有失踪的闹钟"
-        return "对账发现失踪的闹钟：\n" + "\n".join(lines)
+            labels = {
+                "scheduled": "到点未见执行记录",
+                "fired": "正在执行",
+                "done": "已执行完成",
+                "failed": "执行中断或创建失败",
+                "missing": "到点没执行（失踪）",
+                "cancelled": "已取消",
+            }
+            details.append(labels.get(status, status))
+            if alarm["result_note"]:
+                details.append(alarm["result_note"])
+            when = (
+                local_datetime_str(alarm["run_at"], tz)
+                if alarm["run_at"]
+                else alarm["cron_expression"] or "时间未建立"
+            )
+            lines.append(
+                f"#{alarm['id']} → {alarm['target_umo']}（原定 {when}）："
+                + "；".join(details)
+            )
+        return (
+            "闹钟对账：\n" + "\n".join(lines)
+            if lines
+            else "对账完成：窗口内没有触发或应触发的闹钟"
+        )

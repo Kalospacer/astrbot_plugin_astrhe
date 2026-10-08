@@ -3,19 +3,21 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from .. import constants as C
 from ..prompts import planner as planner_prompts
-from ..timeutil import local_date_str, local_datetime_str, utc_now
+from ..timeutil import utc_now
 from .agent_runner import run_night_agent
 
 
 def anniversary_days_until(anniversaries: list[dict], today: datetime) -> int | None:
     """最近的纪念日在几天内（不含今天之外超过前瞻期的返回 None）。"""
     best: int | None = None
-    for ann in anniversaries or []:
+    for ann in anniversaries if isinstance(anniversaries, list) else []:
+        if not isinstance(ann, dict):
+            continue
         date_str = str(ann.get("date", ""))
         try:
             if len(date_str) == 5:  # MM-DD
@@ -24,7 +26,9 @@ def anniversary_days_until(anniversaries: list[dict], today: datetime) -> int | 
                 if target.date() < today.date():
                     target = target.replace(year=today.year + 1)
             else:
-                target = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=today.tzinfo)
+                target = datetime.strptime(date_str, "%Y-%m-%d").replace(
+                    tzinfo=today.tzinfo
+                )
             days = (target.date() - today.date()).days
             if 0 <= days <= C.ANNIVERSARY_LOOKAHEAD_DAYS:
                 if best is None or days < best:
@@ -45,6 +49,9 @@ class Planner:
         persona_prompt: str,
         admins: list[str],
         tz: Any,
+        *,
+        time_info="",
+        window=None,
     ):
         self.storage = storage
         self.context = context
@@ -52,15 +59,11 @@ class Planner:
         self.persona_prompt = persona_prompt
         self.admins = admins
         self.tz = tz
+        self.time_text = time_info
+        self.window = window or (0, utc_now())
 
     def time_info(self, now_ts: float) -> str:
-        now = datetime.fromtimestamp(now_ts, self.tz)
-        tomorrow = now + timedelta(days=1)
-        return (
-            f"现在是 {local_datetime_str(now_ts, self.tz)}。"
-            f"「今天」指 {local_date_str(now_ts, self.tz)}（正在复盘的这一天刚结束，规划的是新的一天），"
-            f"「明天」是 {local_date_str(tomorrow.timestamp(), self.tz)}。"
-        )
+        return self.time_text
 
     async def build_materials(
         self,
@@ -82,14 +85,21 @@ class Planner:
             report_items.append({"umo": r["umo"], "text": f"{text}\n{detail}"})
 
         # 关系本：今天涉及的人 + 未来 14 天有纪念日的人
-        involved_ids: set[str] = set()
+        speakers = await self.storage.db.fetchall(
+            "SELECT DISTINCT sender_id FROM messages WHERE ts>=? AND ts<? AND recalled=0",
+            self.window,
+        )
+        involved_ids = {r["sender_id"] for r in speakers}
         for r in reports:
             for update in (r.get("report") or {}).get("person_updates", []) or []:
                 if update.get("qq"):
                     involved_ids.add(str(update["qq"]))
         persons_lines = []
         for person in await self.storage.persons.list_persons():
-            ann = json.loads(person["anniversaries_json"] or "[]")
+            try:
+                ann = json.loads(person["anniversaries_json"] or "[]")
+            except (ValueError, TypeError):
+                ann = []
             days = anniversary_days_until(ann, now)
             if person["qq"] in involved_ids or days is not None:
                 suffix = f"；纪念日 {days} 天后" if days is not None else ""
@@ -103,8 +113,24 @@ class Planner:
         todos = await self.storage.plans.open_todos()
         todos_text = "\n".join(
             f"#{t['id']} [{t['status']}] {t['content']}（{t['due_kind']} {t['due_date']}，"
-            f"可见于 {t['visible_umos_json']}）"
+            f"可见于 {t['visible_umos_json']}；备注：{t['note']}）"
             for t in todos
+        )
+
+        completed = await self.storage.db.fetchall(
+            "SELECT * FROM todos WHERE status IN ('done','dropped') AND updated_at>=? AND updated_at<?",
+            self.window,
+        )
+        todos_text += "\n【窗口内完成或放弃的待办】\n" + "\n".join(
+            f"#{t['id']} [{t['status']}] {t['content']}；备注：{t['note']}"
+            for t in completed
+        )
+        pending = await self.storage.ledger.pending_friend_requests()
+        from ..timeutil import local_datetime_str
+
+        pending_text = "\n【待处理好友申请】\n" + "\n".join(
+            f"QQ {r['user_id']} 验证：{r['comment']} 时间：{local_datetime_str(r['ts'], tz)}"
+            for r in pending
         )
 
         promises = await self.storage.plans.open_promises()
@@ -121,7 +147,7 @@ class Planner:
         if cron is not None:
             try:
                 jobs = await cron.list_jobs("active_agent")
-                alarms = await self.storage.alarms.list_alarms(200)
+                alarms = await self.storage.alarms.list_alarms(-1)
                 astrhe_ids = {a["cron_job_id"] for a in alarms if a["cron_job_id"]}
                 lines = []
                 for j in jobs:
@@ -135,17 +161,23 @@ class Planner:
             except Exception:  # noqa: BLE001
                 cron_text = "（读取唤醒任务失败）"
 
-        last_run_note = "上一次运行失败了，今天沿用上一份计划" if last_run_failed else ""
+        last_run_note = (
+            "上一次运行失败了，今天沿用上一份计划" if last_run_failed else ""
+        )
 
-        return planner_prompts.build_planner_prompt(
-            report_items,
-            persons_text,
-            todos_text,
-            promises_text,
-            yesterday_plan,
-            cron_text,
-            reconcile_text,
-            last_run_note,
+        return (
+            pending_text
+            + "\n\n"
+            + planner_prompts.build_planner_prompt(
+                report_items,
+                persons_text,
+                todos_text,
+                promises_text,
+                yesterday_plan,
+                cron_text,
+                reconcile_text,
+                last_run_note,
+            )
         )
 
     async def run_planner(

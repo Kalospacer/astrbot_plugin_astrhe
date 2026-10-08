@@ -40,7 +40,13 @@ class RunsRepo:
     ) -> None:
         await self.db.execute(
             "UPDATE runs SET ended_at=?, status=?, error=?, stats_json=? WHERE id=?",
-            (utc_now(), status, error, json.dumps(stats or {}, ensure_ascii=False), run_id),
+            (
+                utc_now(),
+                status,
+                error,
+                json.dumps(stats or {}, ensure_ascii=False),
+                run_id,
+            ),
         )
 
     async def update_run_stats(self, run_id: int, stats: dict[str, Any]) -> None:
@@ -53,9 +59,7 @@ class RunsRepo:
         return await self.db.fetchone("SELECT * FROM runs WHERE id=?", (run_id,))
 
     async def latest_run(self) -> dict[str, Any] | None:
-        return await self.db.fetchone(
-            "SELECT * FROM runs ORDER BY id DESC LIMIT 1"
-        )
+        return await self.db.fetchone("SELECT * FROM runs ORDER BY id DESC LIMIT 1")
 
     async def latest_committed_run(self) -> dict[str, Any] | None:
         return await self.db.fetchone(
@@ -65,6 +69,18 @@ class RunsRepo:
     async def running_runs(self) -> list[dict[str, Any]]:
         return await self.db.fetchall(
             "SELECT * FROM runs WHERE status='running' ORDER BY id ASC"
+        )
+
+    async def committed_run_for_date(self, plan_date: str) -> dict | None:
+        return await self.db.fetchone(
+            "SELECT * FROM runs WHERE status='committed' AND plan_date=?"
+            " ORDER BY id DESC LIMIT 1",
+            (plan_date,),
+        )
+
+    async def previous_run(self, run_id: int) -> dict | None:
+        return await self.db.fetchone(
+            "SELECT * FROM runs WHERE id<? ORDER BY id DESC LIMIT 1", (run_id,)
         )
 
     async def list_runs(self, limit: int = 30) -> list[dict[str, Any]]:
@@ -86,7 +102,13 @@ class RunsRepo:
         await self.db.execute(
             "INSERT INTO reports(run_id, umo, chunk_index, content_json, raw_text)"
             " VALUES(?,?,?,?,?)",
-            (run_id, umo, chunk_index, json.dumps(content or {}, ensure_ascii=False), raw_text),
+            (
+                run_id,
+                umo,
+                chunk_index,
+                json.dumps(content or {}, ensure_ascii=False),
+                raw_text,
+            ),
         )
 
     async def get_reports(self, run_id: int) -> list[dict[str, Any]]:
@@ -106,14 +128,27 @@ class RunsRepo:
         )
         return int(cur.lastrowid)
 
-    async def get_drafts(self, run_id: int) -> list[dict[str, Any]]:
-        return await self.db.fetchall(
-            "SELECT * FROM drafts WHERE run_id=? ORDER BY seq ASC", (run_id,)
+    async def get_drafts(
+        self, run_id: int, status: str | None = "active"
+    ) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM drafts WHERE run_id=?"
+        params = [run_id]
+        if status is not None:
+            sql += " AND status=?"
+            params.append(status)
+        return await self.db.fetchall(sql + " ORDER BY seq ASC, id ASC", tuple(params))
+
+    async def discard_draft(self, run_id: int, draft_id: int) -> bool:
+        cur = await self.db.execute(
+            "UPDATE drafts SET status='discarded' WHERE run_id=? AND id=? AND status='active'",
+            (run_id, draft_id),
         )
+        return bool(cur.rowcount)
 
     async def mark_drafts_applied(self, run_id: int) -> None:
         await self.db.execute(
-            "UPDATE drafts SET applied=1 WHERE run_id=?", (run_id,)
+            "UPDATE drafts SET applied=1, status='applied' WHERE run_id=? AND status='active'",
+            (run_id,),
         )
 
     # ---------------- reviews ----------------

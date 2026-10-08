@@ -16,7 +16,9 @@ from . import constants as C
 from .platform import PlatformHelper, friend_umo, group_umo
 from .storage import Storage
 
-_NO_MESSAGE_PATTERN = re.compile(r"消息不存在|message not found|not found", re.IGNORECASE)
+_NO_MESSAGE_PATTERN = re.compile(
+    r"消息不存在|message not found|not found", re.IGNORECASE
+)
 
 #: OneBot 消息段类型 → 占位符
 _SEGMENT_PLACEHOLDER = {
@@ -31,11 +33,6 @@ _SEGMENT_PLACEHOLDER = {
     "xml": "[卡片消息]",
     "poke": "[戳一戳]",
 }
-
-
-def _normalize_text(text: str) -> str:
-    """bot 消息匹配合并用的文本归一化：去掉首尾与内部多余空白。"""
-    return re.sub(r"\s+", "", text or "")
 
 
 def segments_to_text(message: Any) -> str:
@@ -76,8 +73,6 @@ class Backfiller:
         """
         groups: set[str] = set()
         friends: set[str] = set()
-        platform_id = self.platform.default_platform_id()
-
         for umo in await self.storage.ledger.list_session_umos(window_start):
             pid, mtype, sid = umo.split(":", 2) if umo.count(":") >= 2 else ("", "", "")
             if mtype == "GroupMessage":
@@ -85,16 +80,27 @@ class Backfiller:
             elif mtype == "FriendMessage":
                 friends.add(sid)
 
-        for alarm in await self.storage.alarms.active_alarms():
-            _, mtype, sid = alarm["target_umo"].split(":", 2) if alarm["target_umo"].count(":") >= 2 else ("", "", "")
+        # 已完成的闹钟也可能在窗口内主动发过消息，不能只看仍在等待的闹钟。
+        alarms = {a["id"]: a for a in await self.storage.alarms.active_alarms()}
+        for alarm in await self.storage.alarms.list_alarms(-1):
+            if await self.storage.alarms.events(alarm["id"], window_start) or (
+                alarm["run_at"] is not None and alarm["run_at"] >= window_start
+            ):
+                alarms[alarm["id"]] = alarm
+        for alarm in alarms.values():
+            _, mtype, sid = (
+                alarm["target_umo"].split(":", 2)
+                if alarm["target_umo"].count(":") >= 2
+                else ("", "", "")
+            )
             if mtype == "GroupMessage":
                 groups.add(sid)
             elif mtype == "FriendMessage":
                 friends.add(sid)
 
-        # 冷启动：账本为空时回溯全部群与近期私聊
-        max_ts = await self.storage.ledger.max_message_ts()
-        if max_ts is None:
+        # 冷启动：尚未成功提交时回溯全部群与近期私聊
+        last = await self.storage.runs.latest_committed_run()
+        if last is None:
             try:
                 group_list = await self.platform.call_action("get_group_list")
                 for g in group_list or []:
@@ -104,7 +110,9 @@ class Backfiller:
             except Exception as exc:  # noqa: BLE001
                 self.logger.debug(f"[AstrHe] 冷启动取群列表失败: {exc}")
             try:
-                contacts = await self.platform.call_action("get_recent_contact", count=100)
+                contacts = await self.platform.call_action(
+                    "get_recent_contact", count=100
+                )
                 for c in contacts or []:
                     # chatType==1 为好友私聊（NapCat 扩展字段）
                     if c.get("chatType") == 1:
@@ -114,14 +122,18 @@ class Backfiller:
             except Exception as exc:  # noqa: BLE001
                 self.logger.debug(f"[AstrHe] 冷启动取近期会话失败: {exc}")
 
-        _ = platform_id  # 保留：平台 id 由 group_umo/friend_umo 在调用处组合
         return sorted(groups), sorted(friends)
 
     async def backfill_all(
         self, window_start: float, window_end: float
     ) -> dict[str, Any]:
         """对全部候选会话补拉窗口内消息，返回统计信息。"""
-        stats: dict[str, Any] = {"groups": 0, "friends": 0, "failed": [], "merged_bot": 0}
+        stats: dict[str, Any] = {
+            "groups": 0,
+            "friends": 0,
+            "failed": [],
+            "merged_bot": 0,
+        }
         self._merged_bot_count = 0
         groups, friends = await self.candidate_sessions(window_start)
         platform_id = self.platform.default_platform_id()
@@ -130,7 +142,7 @@ class Backfiller:
         for gid in groups:
             try:
                 n = await self._backfill_session(
-                    group_umo(platform_id, gid),
+                    umo=group_umo(platform_id, gid),
                     action="get_group_msg_history",
                     key="group_id",
                     target=gid,
@@ -145,7 +157,7 @@ class Backfiller:
         for uid in friends:
             try:
                 n = await self._backfill_session(
-                    friend_umo(platform_id, uid),
+                    umo=friend_umo(platform_id, uid),
                     action="get_friend_msg_history",
                     key="user_id",
                     target=uid,
@@ -183,6 +195,7 @@ class Backfiller:
         anchor = ""  # 空锚点从最新开始
         seen_ids: set[str] = set()
         written = 0
+        covered = False
         while True:
             params: dict[str, Any] = {key: int(target), "count": C.BACKFILL_PAGE_SIZE}
             if anchor:
@@ -191,25 +204,27 @@ class Backfiller:
                 result = await self.platform.call_action(action, **params)
             except RuntimeError as exc:
                 if _NO_MESSAGE_PATTERN.search(str(exc)):
-                    break  # 会话没有消息，按空处理
+                    covered = True
+                    break  # 历史已到底
                 raise
             messages = (result or {}).get("messages") or []
             if not messages:
+                covered = True
                 break
             oldest_ts = None
             new_anchor = None
+            page_new_ids = 0
             for raw in messages:
                 mid = str(raw.get("message_id", "") or "")
                 ts = float(raw.get("time", 0) or 0)
                 if oldest_ts is None or ts < oldest_ts:
                     oldest_ts = ts
-                if mid:
-                    if new_anchor is None or int(mid) < int(new_anchor):
-                        new_anchor = mid
+                    new_anchor = mid
                 if mid in seen_ids:
                     continue  # 分页结果包含锚点本身，去重
                 if mid:
                     seen_ids.add(mid)
+                    page_new_ids += 1
                 if not (window_start <= ts <= window_end):
                     continue
                 merged = await self._merge_message(
@@ -223,10 +238,20 @@ class Backfiller:
                     written += 1
             # 整页最旧消息已早于窗口起点，停止翻页
             if oldest_ts is not None and oldest_ts < window_start:
+                covered = True
                 break
-            if new_anchor is None or new_anchor == anchor:
+            if page_new_ids == 0:
+                covered = True
+                break
+            if not new_anchor or new_anchor == anchor:
+                covered = True
                 break  # 没有更旧的消息了
             anchor = new_anchor
+        if covered:
+            removed = await self.storage.ledger.remove_bot_temps(
+                umo, window_start, window_end
+            )
+            self._merged_bot_count += removed
         return written
 
     async def _merge_message(
@@ -243,15 +268,12 @@ class Backfiller:
         规则：
         - 非 bot 消息按 (umo, platform_message_id) 去重（INSERT OR IGNORE，
           已撤回的消息不会被覆盖回未撤回）。
-        - bot 消息先与「无平台 id 的临时记录」按文本 + 120 秒匹配，匹配上
-          只补平台 id；匹配不到才作为新记录写入。
+        - bot 消息以真实平台 id 入库，完整覆盖窗口后统一清理临时回复。
         """
         mid = str(raw.get("message_id", "") or "")
         ts = float(raw.get("time", 0) or 0)
         sender = raw.get("sender", {}) or {}
-        sender_id = str(
-            raw.get("user_id", "") or sender.get("user_id", "") or ""
-        )
+        sender_id = str(raw.get("user_id", "") or sender.get("user_id", "") or "")
         post_type = str(raw.get("post_type", "message"))
         is_bot = post_type == "message_sent" or (self_id and sender_id == self_id)
         text = segments_to_text(raw.get("message"))
@@ -274,25 +296,13 @@ class Backfiller:
             )
             return row_id is not None
 
-        # bot 消息：尝试与临时记录合并
-        norm = _normalize_text(text)
-        candidates = await self.storage.ledger.find_bot_temp_messages(
-            umo, ts - C.BOT_MESSAGE_MERGE_TOLERANCE
-        )
-        for cand in candidates:
-            if abs(cand["ts"] - ts) <= C.BOT_MESSAGE_MERGE_TOLERANCE and (
-                _normalize_text(cand["text"]) == norm
-            ):
-                await self.storage.ledger.attach_platform_id(cand["id"], mid)
-                self._merged_bot_count += 1
-                return True
         if mid:
             row_id = await self.storage.ledger.add_message(
                 umo=umo,
                 platform_id=platform_id,
                 message_type=message_type,
                 session_id=session_id,
-                sender_id=self_id,
+                sender_id=sender_id or self_id,
                 sender_name="",
                 sender_card="",
                 text=text,

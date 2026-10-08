@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..platform import event_umo
 from ..timeutil import local_date_str, utc_now
 
 
@@ -29,7 +30,7 @@ class DayTools:
             return "status 只能是 progress（有进展）/ done（完成）/ dropped（放弃）"
         umo = ""
         try:
-            umo = event.unified_msg_origin
+            umo = event_umo(event)
         except Exception:  # noqa: BLE001
             pass
         today = local_date_str(utc_now(), self._tz_getter())
@@ -55,7 +56,10 @@ class DayTools:
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "todo_id": {"type": "integer", "description": "待办编号（# 后面的数字）"},
+                    "todo_id": {
+                        "type": "integer",
+                        "description": "待办编号（# 后面的数字）",
+                    },
                     "status": {
                         "type": "string",
                         "description": "progress（有进展）/ done（完成）/ dropped（放弃）",
