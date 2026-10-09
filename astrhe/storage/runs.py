@@ -162,9 +162,12 @@ class RunsRepo:
         )
 
     async def count_ok_reviews(self, run_id: int) -> int:
+        return await self.count_reviews(run_id, "ok")
+
+    async def count_reviews(self, run_id: int, status: str) -> int:
         row = await self.db.fetchone(
-            "SELECT COUNT(*) AS c FROM reviews WHERE run_id=? AND status='ok'",
-            (run_id,),
+            "SELECT COUNT(*) AS c FROM reviews WHERE run_id=? AND status=?",
+            (run_id, status),
         )
         return int(row["c"]) if row else 0
 

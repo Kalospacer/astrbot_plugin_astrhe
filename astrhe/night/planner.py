@@ -91,6 +91,17 @@ class Planner:
 
         report_items = []
         for r in reports:
+            if not r.get("parse_ok", True):
+                # 汇报没写成：明说，让主 agent 自己去翻，别把残缺原文当成汇报
+                raw = str(r.get("raw", "") or "").strip()
+                text = (
+                    "（这个会话的汇报失败了，没有拿到有效内容。需要了解这里发生了什么，"
+                    f"请用 astrhe_read_messages 读 {r['umo']} 的原始记录自己补上，不要凭空猜。）"
+                )
+                if raw:
+                    text += f"\n汇报员留下的原文（不完整，仅供参考）：{raw}"
+                report_items.append({"umo": r["umo"], "text": text})
+                continue
             report = r.get("report") or {}
             text = report.get("summary") or r.get("raw", "")
             detail = json.dumps(

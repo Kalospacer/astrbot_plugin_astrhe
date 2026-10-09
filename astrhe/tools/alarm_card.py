@@ -6,7 +6,8 @@ from ..platform import parse_umo
 
 STANDARD_NOTE_SUFFIX = (
     "\n\n【标准操作说明】发送消息用 send_message_to_user：session 留空表示当前会话"
-    "（即本任务的目标会话）；需要 @ 某人时，在消息里用 mention_user 组件"
+    "（即本任务的目标会话）。这条任务只在本任务的目标会话里说话，不要给其他会话"
+    "（包括别人的私聊）发消息，那些地方另有各自的任务负责。需要 @ 某人时，在消息里用 mention_user 组件"
     "（mention_user_id=对方 QQ 号）。对方回复时，参考 AstrHe 待办里属于这个会话的内容。"
     "新建或修改定时任务请用 astrhe_schedule，不要用 future_task。"
 )

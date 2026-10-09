@@ -44,6 +44,10 @@ REPORT_CONCURRENCY = 3
 REVIEW_MIN_OK = 1
 REVIEW_MAX_OK = 2
 
+#: 审稿人没按格式给出意见（例如回了一句闲聊）累计这么多次后不再重试，
+#: 允许主 agent 自查后提交，免得整晚卡在审稿上
+REVIEW_MAX_INVALID = 2
+
 #: 夜间 agent 的 max_steps：tool_loop_agent 要求整数，这里传实际不可能达到
 #: 的极大值，表示「不设步数上限，做到做完为止」。runner 在 max_steps >= 16 时
 #: 按百分比插步数提醒（tool_loop_agent_runner.py:1041-1068），取极大值时不会触发。

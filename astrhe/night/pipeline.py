@@ -279,6 +279,9 @@ class NightPipeline:
         )
         stats["sessions"] = len(umos)
         stats["reports"] = len(reports)
+        stats["reports_failed"] = [
+            r["umo"] for r in reports if not r.get("parse_ok", True)
+        ]
 
         # ④ 主 agent
         self._set_stage("plan")

@@ -244,8 +244,8 @@ async def _main_third_review(tmp_path):
         ctx.tool_loop_agent.handlers = [
             _make_handler(_reporter_handler),
             planner_three_reviews,
-            _make_handler(lambda kw: "意见1"),
-            _make_handler(lambda kw: "意见2"),
+            _make_handler(lambda kw: "结论：需要修改\n意见1"),
+            _make_handler(lambda kw: "结论：通过\n意见2"),
             # 第 3 次审稿在代码层就被拒，不会消耗模型调用
         ]
         result = await _build_pipeline(s, ctx, FakeLogger()).run("manual")

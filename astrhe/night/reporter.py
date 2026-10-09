@@ -2,7 +2,8 @@
 
 - 记录预渲染成紧凑文本行，已撤回消息在代码里剔除（工具与 prompt 都看不到）。
 - 不超过 300 条的会话一次读完；超过的切块，每块一个子代理，再一次合并调用。
-- 子代理并发 3；JSON 解析失败追问一次；仍失败保存原文并在运行记录标注。
+- 子代理并发 3；JSON 解析失败或 summary 为空追问一次；仍失败保存原文并标注失败，
+  主 agent 的材料里会提示它自己翻原始记录。
 - 连续三次模型请求失败（NightAgentError）向上抛，未提交的整晚终止。
 """
 
@@ -31,8 +32,9 @@ REPORT_JSON_KEYS = (
 )
 
 FIX_JSON_PROMPT = (
-    "你的输出不是合法 JSON。请只输出一个 JSON 对象，不要包 markdown 代码块，"
-    "不要再调用工具，直接输出合法 JSON。包含这些键：" + "、".join(REPORT_JSON_KEYS)
+    "你的输出不是有效的汇报。请只输出一个 JSON 对象，不要包 markdown 代码块，"
+    "不要再调用工具，直接输出合法 JSON。summary 必须写出这个会话发生了什么，不能为空。"
+    "包含这些键：" + "、".join(REPORT_JSON_KEYS)
 )
 
 
@@ -59,6 +61,15 @@ def parse_report_json(text: str) -> dict | None:
         except (ValueError, TypeError):
             return None
     return data if isinstance(data, dict) else None
+
+
+def parse_valid_report(text: str) -> dict | None:
+    """解析并检查汇报：summary 为空（例如只剩 {}）的不算有效汇报。"""
+    data = parse_report_json(text)
+    summary = data.get("summary") if data else None
+    if isinstance(summary, str) and summary.strip():
+        return data
+    return None
 
 
 class Reporter:
@@ -128,7 +139,7 @@ class Reporter:
         async with self._semaphore:
             if len(chunks) == 1:
                 raw = await self._report_chunk(umo, chunks[0], system, 1, 1)
-                report = parse_report_json(raw)
+                report = parse_valid_report(raw)
             else:
                 partials = []
                 for idx, chunk in enumerate(chunks, 1):
@@ -137,7 +148,7 @@ class Reporter:
                     )
                 merge_prompt = reporter_prompts.build_merge_prompt(partials)
                 raw = await self._json_response(umo, system, merge_prompt, [])
-                report = parse_report_json(raw)
+                report = parse_valid_report(raw)
 
         await self.storage.runs.add_report(
             run_id=run_id,
@@ -167,7 +178,7 @@ class Reporter:
     async def _json_response(
         self, umo: str, system: str, prompt: str, tools: list
     ) -> str:
-        """保留首次上下文；仅在解析失败时追问一次格式，不重读原始材料。"""
+        """保留首次上下文；仅在汇报无效时追问一次格式，不重读原始材料。"""
         text, contexts = await run_night_agent(
             self.context,
             umo=umo,
@@ -176,7 +187,7 @@ class Reporter:
             prompt=prompt,
             tools=tools,
         )
-        if parse_report_json(text) is not None:
+        if parse_valid_report(text) is not None:
             return text
         text2, _ = await run_night_agent(
             self.context,

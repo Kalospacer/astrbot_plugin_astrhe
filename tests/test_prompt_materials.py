@@ -111,7 +111,7 @@ def test_materials_include_pending_notes_and_all_speakers(tmp_path):
                 time_info="规划日：2026-10-08 星期四",
             )
             await r.review(rid, "全面")
-            assert "会话完整汇报" in ctx.tool_loop_agent.calls[-1]["prompt"]
+            assert any("会话完整汇报" in c["prompt"] for c in ctx.tool_loop_agent.calls)
             rep = Reporter(
                 s,
                 ctx,

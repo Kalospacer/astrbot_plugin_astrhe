@@ -59,7 +59,9 @@ class DraftCommitter:
         if not any(d["kind"] == "plan" for d in drafts):
             raise CommitError("草稿箱里没有规划书，不能提交")
         ok_reviews = await self.storage.runs.count_ok_reviews(self.run_id)
-        if ok_reviews < C.REVIEW_MIN_OK:
+        invalid_reviews = await self.storage.runs.count_reviews(self.run_id, "invalid")
+        # 审稿人反复给不出有效意见时，主 agent 自查后可以提交，不让整晚卡死
+        if ok_reviews < C.REVIEW_MIN_OK and invalid_reviews < C.REVIEW_MAX_INVALID:
             raise CommitError(
                 "还没有成功完成过审稿，不能提交；先用 astrhe_request_review"
             )

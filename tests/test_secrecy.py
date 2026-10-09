@@ -65,13 +65,26 @@ async def _main(tmp_path):
         )
         event = FakeEvent(umo=GROUP_UMO, sender_id="40004")
         text = await read_plan.fn(event)
-        assert "秘密计划" not in text and "（保密内容）" in text
-        assert "公开内容" in text
+        assert "秘密计划" not in text and "公开内容" not in text
+        assert "管理员私聊" in text
 
-        # 别的私聊：10001 不在场，可以看到
-        event2 = FakeEvent(umo="default:FriendMessage:40004", sender_id="40004")
+        # 普通人的私聊同样只给本会话段落
+        member_dm = FakeEvent(umo="default:FriendMessage:40004", sender_id="40004")
+        assert "公开内容" not in await read_plan.fn(member_dm)
+
+        # 管理员私聊：全文；管理员不是保密对象，保密段照常可见
+        event2 = FakeEvent(
+            umo="default:FriendMessage:40004", sender_id="40004", role="admin"
+        )
         text2 = await read_plan.fn(event2)
-        assert "秘密计划" in text2
+        assert "公开内容" in text2 and "秘密计划" in text2
+
+        # 管理员本人是保密对象时，全文里的保密段照样遮挡
+        target = FakeEvent(
+            umo="default:FriendMessage:10001", sender_id="10001", role="admin"
+        )
+        text3 = await read_plan.fn(target)
+        assert "公开内容" in text3 and "秘密计划" not in text3
 
         # schedule list 的保密过滤：对 10001 保密的闹钟，10001 在场时别人也看不到
         qq = QQClient(PlatformHelper(ctx, FakeLogger()))

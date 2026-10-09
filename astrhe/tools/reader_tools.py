@@ -179,8 +179,10 @@ class ReaderTools:
             AstrHeFunctionTool(
                 name="astrhe_read_plan",
                 description=(
-                    "读规划书全文。参数：date（可选，YYYY-MM-DD，默认最近一份）。"
-                    "list=true 列出已有日期，每页 60 条，offset 翻页。对别人保密的内容可能被遮挡。"
+                    "读规划书。参数：date（可选，YYYY-MM-DD，默认最近一份）。"
+                    "list=true 列出已有日期，每页 60 条，offset 翻页。"
+                    "白天只有管理员私聊能读全文，其他会话只返回与本会话相关的段落；"
+                    "对别人保密的内容可能被遮挡。"
                 ),
                 parameters=PLAN_READ_PARAMETERS,
                 fn=self._read_plan,
@@ -327,8 +329,9 @@ class ReaderTools:
             plan = await self.storage.plans.get_latest_plan()
         if not plan:
             return "还没有任何规划书"
-        text = plan["full_text"]
-        # 保密过滤：夜间虚拟会话不过滤；白天按发送者与在场判定过滤
+        if self.run_id is not None:
+            # 夜间复盘读自己的规划书，不遮挡
+            return f"规划书（{plan['plan_date']}）：\n{plan['full_text']}"
         viewer_id = ""
         umo = ""
         try:
@@ -336,12 +339,27 @@ class ReaderTools:
             umo = event_umo(event)
         except Exception:  # noqa: BLE001
             pass
-        if self.run_id is None and umo and self.secrecy_resolver is not None:
+        _, message_type, _ = parse_umo(umo)
+        # 全文里有各个会话的事和私聊细节，白天只在管理员私聊里给全文，
+        # 其他会话只给本会话的段落，免得被群友一问就整本复述出来
+        admin_private = (
+            getattr(event, "role", "member") == "admin"
+            and message_type == "FriendMessage"
+        )
+        if admin_private:
+            title = f"规划书（{plan['plan_date']}）"
+            text = plan["full_text"]
+        else:
+            title = f"规划书（{plan['plan_date']}）里与本会话相关的段落"
+            sections = await self.storage.plans.get_sections(plan["id"])
+            text = sections.get(umo, "") or "（没有专门写给本会话的段落）"
+            text += "\n（完整规划书只在管理员私聊里可以翻阅）"
+        if umo and self.secrecy_resolver is not None:
             present = await self.secrecy_resolver.present_ids(umo)
             text = filter_secret_text(
                 text, viewer_id=viewer_id, session_umo=umo, present_ids=present
             )
-        return f"规划书（{plan['plan_date']}）：\n{text}"
+        return f"{title}：\n{text}"
 
     async def _read_reports(self, event: Any, **kwargs) -> str:
         if self.run_id is None:

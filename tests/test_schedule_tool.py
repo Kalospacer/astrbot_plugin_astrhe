@@ -130,8 +130,9 @@ async def _main(tmp_path):
         # 取消：非管理员不能取消别的会话的闹钟
         cancel_deny = await impl.run(member_event, action="cancel", alarm_id=2)
         assert "当前会话" in cancel_deny
-        # 对管理员本人保密的 #1（生日惊喜）在聊天里同样查不到，需要时走面板
-        assert await impl.run(admin_event, action="cancel", alarm_id=1) == "找不到闹钟 #1"
+        # 对管理员本人保密的 #1（生日惊喜）列表里看不到，但管理员报出编号就能撤
+        assert "#1 " not in await impl.run(admin_event, action="list")
+        assert await impl.run(admin_event, action="cancel", alarm_id=1) == "闹钟 #1 已取消"
         open_alarm = next(
             a["id"]
             for a in await s.alarms.list_alarms(-1)

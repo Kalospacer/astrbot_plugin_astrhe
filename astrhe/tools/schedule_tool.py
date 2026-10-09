@@ -329,8 +329,11 @@ class ScheduleToolImpl:
         except (TypeError, ValueError):
             return "edit 需要 alarm_id（闹钟编号）"
         alarm = await self.storage.alarms.get_alarm(alarm_id)
-        # 保密闹钟与不存在的编号同样回复，连「这个编号存在」也不透露
-        if alarm is None or await self._hidden_from_caller(event, alarm, sender_id):
+        # 保密闹钟对非管理员与不存在的编号同样回复，连「这个编号存在」也不透露；
+        # 管理员报得出编号就能处理（列表里仍然看不到，惊喜不会被剧透）
+        if alarm is None or (
+            not is_admin and await self._hidden_from_caller(event, alarm, sender_id)
+        ):
             return f"找不到闹钟 #{alarm_id}"
         deny = self._check_manage(event, alarm, is_admin)
         if deny:
@@ -456,8 +459,11 @@ class ScheduleToolImpl:
         except (TypeError, ValueError):
             return "cancel 需要 alarm_id（AstrHe 闹钟编号）或 job_id（外部任务）"
         alarm = await self.storage.alarms.get_alarm(alarm_id)
-        # 保密闹钟与不存在的编号同样回复，连「这个编号存在」也不透露
-        if alarm is None or await self._hidden_from_caller(event, alarm, sender_id):
+        # 保密闹钟对非管理员与不存在的编号同样回复，连「这个编号存在」也不透露；
+        # 管理员报得出编号就能处理（列表里仍然看不到，惊喜不会被剧透）
+        if alarm is None or (
+            not is_admin and await self._hidden_from_caller(event, alarm, sender_id)
+        ):
             return f"找不到闹钟 #{alarm_id}"
         deny = self._check_manage(event, alarm, is_admin)
         if deny:
