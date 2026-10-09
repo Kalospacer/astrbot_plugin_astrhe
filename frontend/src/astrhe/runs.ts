@@ -85,6 +85,19 @@ function duration(run: RunRow) {
   return seconds >= 60 ? `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒` : `${seconds} 秒`;
 }
 
+/** 运行列表的结构化摘要（状态、模式、耗时已翻译成中文），供不用 runListMarkup 的界面使用。 */
+export function runSummaries() {
+  return runs.map((run) => ({
+    id: run.id,
+    planDate: run.plan_date || "—",
+    mode: MODE[run.mode] ?? run.mode,
+    status: run.status,
+    statusCn: (STATUS[run.status] ?? [run.status.toUpperCase(), run.status])[1],
+    startedAt: dateTime(run.started_at),
+    duration: duration(run),
+  }));
+}
+
 /** 列表：沿用检索弹窗的行样式（档案 / 科室 / 访问三列）。 */
 export function runListMarkup() {
   if (!runs.length)

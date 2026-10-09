@@ -38,7 +38,13 @@ def _plugin_version() -> str:
 
 class WebApi:
     def __init__(
-        self, storage: Any, context: Any, tz_getter, runtime_status, admins_getter=None
+        self,
+        storage: Any,
+        context: Any,
+        tz_getter,
+        runtime_status,
+        admins_getter=None,
+        frontend_getter=None,
     ):
         self.storage = storage
         self.context = context
@@ -46,6 +52,8 @@ class WebApi:
         self._runtime_status = runtime_status  # () -> dict 运行中状态
         # 查看页判断「对管理员保密」
         self._admins_getter = admins_getter or (lambda: [])
+        # 读取插件设置里「横屏 / 竖屏使用的前端」，返回 (横屏, 竖屏)
+        self._frontend_getter = frontend_getter
         self.memory_api = MemoryWebApi(storage, lambda: astrbot_web, self._json_body)
 
     def register(self) -> None:
@@ -55,6 +63,7 @@ class WebApi:
         if not callable(register):
             return
         routes = [
+            ("/frontend", self._frontend, ["GET"], "档案终端按横竖屏使用的前端"),
             (
                 "/overview",
                 self._overview,
@@ -75,6 +84,27 @@ class WebApi:
                 pass
 
     # ---------------- 查询 ----------------
+
+    async def _frontend(self):
+        """横屏 / 竖屏各自使用的前端；设置缺失或不合法时回退默认值。"""
+        try:
+            landscape, portrait = self._frontend_getter()
+        except Exception:  # noqa: BLE001
+            landscape = portrait = None
+        return astrbot_web.json_response(
+            {
+                "landscape": (
+                    landscape
+                    if landscape in C.FRONTEND_CHOICES
+                    else C.FRONTEND_LANDSCAPE_DEFAULT
+                ),
+                "portrait": (
+                    portrait
+                    if portrait in C.FRONTEND_CHOICES
+                    else C.FRONTEND_PORTRAIT_DEFAULT
+                ),
+            }
+        )
 
     async def _overview(self):
         tz = self._tz_getter()

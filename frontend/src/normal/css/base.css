@@ -1,0 +1,107 @@
+/* NORMAL 基础：系统字体、MD3 配色底色、通用小部件（状态标签、空状态、加载块）。
+   颜色、字阶、形状、动效一律取 mdui 提供的 MD3 设计令牌。 */
+:root {
+  font-family:
+    system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+body {
+  overflow: hidden;
+  color: rgb(var(--mdui-color-on-background));
+  background: rgb(var(--mdui-color-background));
+  font-size: var(--mdui-typescale-body-large-size);
+  line-height: var(--mdui-typescale-body-large-line-height);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+#normal-root {
+  position: fixed;
+  inset: 0;
+}
+button {
+  font: inherit;
+}
+.scroll {
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--mdui-color-outline-variant)) transparent;
+}
+
+/* ---- 状态标签：只显示、不可点击，配色取自 MD3 容器色 ---- */
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid rgb(var(--mdui-color-outline-variant));
+  border-radius: var(--mdui-shape-corner-small);
+  color: rgb(var(--mdui-color-on-surface-variant));
+  font-size: var(--mdui-typescale-label-medium-size);
+  font-weight: var(--mdui-typescale-label-medium-weight);
+  letter-spacing: var(--mdui-typescale-label-medium-tracking);
+  line-height: 1;
+  white-space: nowrap;
+}
+.status-chip[data-tone="active"] {
+  border-color: transparent;
+  background: rgb(var(--mdui-color-secondary-container));
+  color: rgb(var(--mdui-color-on-secondary-container));
+}
+.status-chip[data-tone="done"] {
+  border-color: transparent;
+  background: rgb(var(--mdui-color-tertiary-container));
+  color: rgb(var(--mdui-color-on-tertiary-container));
+}
+.status-chip[data-tone="bad"] {
+  border-color: transparent;
+  background: rgb(var(--mdui-color-error-container));
+  color: rgb(var(--mdui-color-on-error-container));
+}
+
+/* ---- 空状态 / 加载中 ---- */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 72px 24px;
+  text-align: center;
+}
+.empty-state > [class^="mdui-icon-"],
+.empty-state > :first-child {
+  font-size: 3.5rem;
+  color: rgb(var(--mdui-color-outline));
+}
+.empty-state h3 {
+  margin: 8px 0 0;
+  font-size: var(--mdui-typescale-title-large-size);
+  font-weight: var(--mdui-typescale-title-large-weight);
+  line-height: var(--mdui-typescale-title-large-line-height);
+}
+.empty-state p {
+  max-width: 34ch;
+  margin: 0 0 8px;
+  color: rgb(var(--mdui-color-on-surface-variant));
+  font-size: var(--mdui-typescale-body-medium-size);
+  line-height: var(--mdui-typescale-body-medium-line-height);
+}
+.loading-block {
+  display: flex;
+  justify-content: center;
+  padding: 72px 24px;
+}
+#loading {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 1;
+}

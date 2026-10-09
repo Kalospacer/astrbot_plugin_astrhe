@@ -1,0 +1,55 @@
+/* 动效：View Transitions 的 container transform 与「减少动态效果」。
+   曲线与时长取 MD3 规范：emphasized decelerate / accelerate。 */
+@keyframes fade-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+/* 页面其余部分不参与过渡 */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+::view-transition-group(container) {
+  animation-duration: 400ms;
+  animation-timing-function: cubic-bezier(0.05, 0.7, 0.1, 1);
+}
+::view-transition-old(container) {
+  animation: fade-out 90ms linear both;
+}
+::view-transition-new(container) {
+  animation: fade-in 210ms linear 90ms both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --mdui-motion-duration-short1: 0ms;
+    --mdui-motion-duration-short2: 0ms;
+    --mdui-motion-duration-short3: 0ms;
+    --mdui-motion-duration-short4: 0ms;
+    --mdui-motion-duration-medium1: 0ms;
+    --mdui-motion-duration-medium2: 0ms;
+    --mdui-motion-duration-medium3: 0ms;
+    --mdui-motion-duration-medium4: 0ms;
+    --mdui-motion-duration-long1: 0ms;
+    --mdui-motion-duration-long2: 0ms;
+    --mdui-motion-duration-long3: 0ms;
+    --mdui-motion-duration-long4: 0ms;
+    --mdui-motion-duration-extra-long1: 0ms;
+    --mdui-motion-duration-extra-long2: 0ms;
+    --mdui-motion-duration-extra-long3: 0ms;
+    --mdui-motion-duration-extra-long4: 0ms;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

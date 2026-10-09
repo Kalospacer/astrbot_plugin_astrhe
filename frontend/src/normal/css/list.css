@@ -1,0 +1,64 @@
+/* 列表窗格：标题、列表项、页脚。 */
+.list-heading {
+  padding: 8px 24px 12px;
+}
+.list-heading h2 {
+  margin: 0;
+  font-size: var(--mdui-typescale-headline-small-size);
+  font-weight: var(--mdui-typescale-headline-small-weight);
+  line-height: var(--mdui-typescale-headline-small-line-height);
+}
+.list-heading p {
+  margin: 4px 0 0;
+  color: rgb(var(--mdui-color-on-surface-variant));
+  font-size: var(--mdui-typescale-body-medium-size);
+  line-height: var(--mdui-typescale-body-medium-line-height);
+}
+.pane-list mdui-list {
+  padding: 0 12px;
+}
+.leading-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin-right: 4px;
+  border-radius: var(--mdui-shape-corner-full);
+  background: rgb(var(--mdui-color-primary-container));
+  color: rgb(var(--mdui-color-on-primary-container));
+  font-size: 1.5rem;
+}
+.leading-icon > * {
+  font-size: 1.25rem;
+}
+.trailing {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 8px;
+}
+.trailing > mdui-icon-lock--outlined {
+  color: rgb(var(--mdui-color-outline));
+  font-size: 1.125rem;
+}
+.list-footer {
+  padding: 24px 24px 32px;
+  text-align: center;
+}
+.list-footer button {
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--mdui-shape-corner-small);
+  background: none;
+  color: rgb(var(--mdui-color-on-surface-variant));
+  font-size: var(--mdui-typescale-label-medium-size);
+  letter-spacing: var(--mdui-typescale-label-medium-tracking);
+  cursor: pointer;
+}
+.list-footer button:hover {
+  background: rgb(var(--mdui-color-on-surface) / var(--mdui-state-layer-hover));
+}
+.list-footer button:focus-visible {
+  outline: 2px solid rgb(var(--mdui-color-primary));
+}

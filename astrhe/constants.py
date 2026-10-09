@@ -161,3 +161,8 @@ DB_FILENAME = "astrhe.db"
 # ---------------- 查看页 ----------------
 #: 档案阵列每列最多展示的条目数（阵列每列 32 行，档案占第 12–31 行）
 DASHBOARD_COLUMN_LIMIT = 20
+#: 档案终端的两套前端：SOUL OS 是三维版，NORMAL 是 Material Design 3 普通版
+FRONTEND_CHOICES = ("SOUL OS", "NORMAL")
+#: 页面打开时按横屏 / 竖屏选前端的默认值
+FRONTEND_LANDSCAPE_DEFAULT = "SOUL OS"
+FRONTEND_PORTRAIT_DEFAULT = "NORMAL"

@@ -1,0 +1,83 @@
+/* 布局：按 MD3 窗口尺寸等级采用 list-detail 规范布局。
+   Compact <600px：底部导航栏 + 单栏；Medium 600–839px：导航轨道 + 单栏；Expanded ≥840px：导航轨道 + 列表栏 + 详情栏。 */
+mdui-layout {
+  background: rgb(var(--mdui-color-background));
+}
+mdui-top-app-bar {
+  background: rgb(var(--mdui-color-background));
+}
+mdui-top-app-bar-title {
+  flex: 1;
+  min-width: 0;
+}
+#nav-bar {
+  display: none;
+}
+@media (max-width: 599.98px) {
+  #nav-bar:not([data-hidden]) {
+    display: flex;
+  }
+  #nav-rail {
+    display: none;
+  }
+}
+#main {
+  position: relative;
+  overflow: hidden;
+}
+.panes {
+  display: flex;
+  height: 100%;
+}
+.pane {
+  min-width: 0;
+  height: 100%;
+}
+
+/* compact / medium：同一时间只显示列表或详情 */
+.panes:not([data-size="expanded"]) .pane {
+  flex: 1;
+}
+.panes:not([data-size="expanded"])[data-pane="list"] .pane-detail,
+.panes:not([data-size="expanded"])[data-pane="detail"] .pane-list {
+  display: none;
+}
+
+/* medium：详情是圆角容器，页面左右留出边距 */
+.panes[data-size="medium"] .pane-detail {
+  margin: 0 16px 16px;
+  overflow: hidden;
+  border-radius: var(--mdui-shape-corner-extra-large);
+  background: rgb(var(--mdui-color-surface-container-low));
+}
+.panes[data-size="medium"] .pane-list .scroll {
+  max-width: 840px;
+  margin: 0 auto;
+}
+
+/* expanded：列表栏 + 详情栏并排 */
+.panes[data-size="expanded"] {
+  gap: 16px;
+  padding-right: 16px;
+}
+.panes[data-size="expanded"] .pane-list {
+  flex: 0 0 clamp(340px, 34%, 440px);
+}
+.panes[data-size="expanded"] .pane-detail {
+  flex: 1;
+  margin-bottom: 16px;
+  height: calc(100% - 16px);
+  overflow: hidden;
+  border-radius: var(--mdui-shape-corner-extra-large);
+  background: rgb(var(--mdui-color-surface-container-low));
+}
+
+/* 手机竖屏：详情铺满，没有圆角容器 */
+.panes[data-size="compact"] .pane-detail {
+  background: rgb(var(--mdui-color-background));
+}
+
+/* snackbar 在底部导航栏之上出现（mdui 自己定位在窗口底部） */
+html[data-nav-bar] mdui-snackbar {
+  margin-bottom: 5rem;
+}

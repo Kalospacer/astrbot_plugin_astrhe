@@ -1,6 +1,6 @@
 {
   "name": "astrhe-dashboard",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -12,6 +12,9 @@
   },
   "dependencies": {
     "@kitlangton/rolling-number": "0.4.1",
+    "@material/material-color-utilities": "0.3.0",
+    "@mdui/icons": "1.0.4",
+    "mdui": "2.1.5",
     "three": "^0.183.0"
   },
   "devDependencies": {

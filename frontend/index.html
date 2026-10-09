@@ -1,13 +1,21 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-launching>
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#e8e5e1" />
     <title>AstrHe 档案终端</title>
+    <style>
+      /* 分流期间（读设置、下载所选前端）保持中性：压住 SOUL OS 样式里的米色底，选定后由前端自己上色 */
+      html[data-launching],
+      html[data-launching] body,
+      html[data-launching] #viewport {
+        background: transparent !important;
+      }
+    </style>
   </head>
   <body>
     <main id="viewport"><div id="stage"></div></main>
-    <script type="module" src="/src/main.ts"></script>
+    <script type="module" src="/src/launcher.ts"></script>
   </body>
 </html>

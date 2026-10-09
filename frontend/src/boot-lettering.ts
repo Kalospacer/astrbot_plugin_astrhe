@@ -1,5 +1,4 @@
 import artwork from "./boot-lettering-art.json";
-import "./boot-lettering.css";
 
 type PhraseKey = keyof typeof artwork;
 const ns = "http://www.w3.org/2000/svg";

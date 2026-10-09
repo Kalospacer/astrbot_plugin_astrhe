@@ -1,6 +1,6 @@
 # 第三方声明
 
-AstrHe 档案终端（`frontend/`，构建产物在 `pages/dashboard/`）基于以下作品制作。
+AstrHe 档案终端（`frontend/`，构建产物在 `pages/dashboard/`）基于以下作品制作。档案终端有两套前端：SOUL OS（三维版，基于 RhineLabUI、three.js、MiSans 等）和 NORMAL（Material Design 3 普通版，基于 mdui）。
 
 ## RhineLabUI
 
@@ -24,7 +24,22 @@ AstrHe 档案终端（`frontend/`，构建产物在 `pages/dashboard/`）基于�
 - Bold：MyFonts / Monotype 桌面许可；欢迎页三行各合成一整块静态图形，不按单个字形调用。
 - 重新生成轮廓需要自行取得字体并在本地运行 `scripts/make-boot-lettering.py`。
 
+## mdui（NORMAL 前端）
+
+- 作者：zdhxiong，<https://github.com/zdhxiong/mdui>，版本 2.1.5（精确锁定）
+- 许可：MIT（Copyright (c) 2016-present zdhxiong@gmail.com），以包内 `LICENSE` 为准
+- 使用范围：NORMAL 的全部界面组件（顶部应用栏、导航栏 / 导航轨道、列表、标签页、对话框、输入框、提示条等）与 MD3 设计令牌样式；按需引入，不使用其图标字体。
+- mdui 自带的运行时依赖也一并打包进 NORMAL：`@mdui/jq`、`@mdui/shared`、`@mdui/icons-shared`、`@floating-ui/utils`、`classcat`、`ssr-window`、`is-promise`（MIT）；`lit`、`lit-html`、`lit-element`、`@lit/reactive-element`、`@lit/localize`、`@lit-labs/ssr-dom-shim`（BSD-3-Clause，Google LLC）；`@material/material-color-utilities`（Apache-2.0，Material Eng，用于动态配色）；`tslib`（0BSD，Microsoft Corp.）。
+
+## @mdui/icons（NORMAL 前端的图标）
+
+- 作者：zdhxiong，版本 1.0.4（精确锁定）
+- 许可：包内 `LICENSE` 为 MIT（Copyright (c) 2021-present zdhxiong@gmail.com）
+- 图标图形来自 Google 的 Material Icons，据其 README 以 Apache License 2.0 提供（<https://github.com/google/material-design-icons>）。每个图标是独立的 SVG Web Component，NORMAL 只引入用到的几十个；不使用图标字体。
+- NORMAL 使用系统字体，不下载 MiSans，也不请求三维模型。
+
 ## 其他依赖
+
 
 - three.js：MIT，<https://github.com/mrdoob/three.js>
 - @kitlangton/rolling-number：MIT，见 [`public/licenses/rolling-number.txt`](public/licenses/rolling-number.txt)

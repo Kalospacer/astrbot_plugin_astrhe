@@ -1,0 +1,47 @@
+/* 对话框：编辑关系层、操作确认、关于。 */
+mdui-dialog {
+  --z-index: 2400;
+}
+/* 输入框不要放进 grid（会被拉成固定高度，helper 文字溢出盖住下一个输入框），用纵向 flex */
+.person-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+}
+.person-form mdui-text-field {
+  width: 100%;
+}
+.dialog-error {
+  margin: 12px 0 0;
+  color: rgb(var(--mdui-color-error));
+  font-size: var(--mdui-typescale-body-medium-size);
+}
+.dialog-error[hidden] {
+  display: none;
+}
+.about-list {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 0;
+  list-style: none;
+}
+.about-list li {
+  display: grid;
+  grid-template-columns: 5.5em 1fr;
+  gap: 12px;
+}
+.about-list b {
+  color: rgb(var(--mdui-color-on-surface-variant));
+  font-weight: 500;
+}
+.about-notice {
+  margin: 12px 0 0;
+  color: rgb(var(--mdui-color-on-surface-variant));
+  font-size: var(--mdui-typescale-body-small-size);
+  line-height: var(--mdui-typescale-body-small-line-height);
+}
+.about-notice a {
+  color: rgb(var(--mdui-color-primary));
+}

@@ -18,5 +18,19 @@
     "hint": "选择 AstrBot 已有的人格；留空或所选人格不存在时使用 AstrBot 默认人格。汇报、规划、审稿共用。",
     "_special": "select_persona",
     "default": ""
+  },
+  "frontend_landscape": {
+    "type": "string",
+    "description": "横屏打开时使用的前端",
+    "hint": "只按打开档案终端页面那一刻的横竖屏选择，之后转屏或拖动窗口不会切换。SOUL OS 是三维档案馆，每次打开约下载 27 MB；NORMAL 是 Material Design 3 普通版，用系统字体，不下载三维模型和字体，适合低配电脑和手机。",
+    "options": ["SOUL OS", "NORMAL"],
+    "default": "SOUL OS"
+  },
+  "frontend_portrait": {
+    "type": "string",
+    "description": "竖屏打开时使用的前端",
+    "hint": "规则同上：只看打开页面那一刻的横竖屏。手机竖着打开时用这一项，默认 NORMAL。",
+    "options": ["SOUL OS", "NORMAL"],
+    "default": "NORMAL"
   }
 }

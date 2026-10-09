@@ -75,7 +75,12 @@ class AstrHeRuntime:
         self.alarm_tracker = AlarmTracker(self.storage, context, self.tz, logger)
         self.scheduler = NightScheduler(self.storage, self.tz, self.run_night, logger)
         self.webapi = WebApi(
-            self.storage, context, self.tz, self.status_dict, self.admins
+            self.storage,
+            context,
+            self.tz,
+            self.status_dict,
+            self.admins,
+            frontend_getter=self.frontend_choices,
         )
 
         self._external_tasks: set[asyncio.Task] = set()
@@ -89,6 +94,13 @@ class AstrHeRuntime:
             return bool(self.config.get("enabled", False))
         except Exception:  # noqa: BLE001
             return False
+
+    def frontend_choices(self) -> tuple[str, str]:
+        """档案终端横屏、竖屏各用哪套前端（非法值由接口回退默认）。"""
+        return (
+            self.config.get("frontend_landscape", C.FRONTEND_LANDSCAPE_DEFAULT),
+            self.config.get("frontend_portrait", C.FRONTEND_PORTRAIT_DEFAULT),
+        )
 
     def tz(self):
         try:

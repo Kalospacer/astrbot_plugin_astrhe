@@ -1,8 +1,6 @@
 import { createRollingClock } from "./rolling-clock";
 import { InspectionOverlay } from "./inspection-overlay";
 import { DocumentDecryption } from "./document-decryption";
-import "./document-decryption.css";
-import "./decryption.css";
 import { escapeHtml } from "./html";
 import {
   normalizeQuality,
@@ -12,11 +10,6 @@ import {
   type RenderQuality,
 } from "./render-quality";
 import { qualityMarkup, syncQualityUI } from "./quality-settings";
-import "@kitlangton/rolling-number/styles.css";
-import "./style.css";
-import "./quality-settings.css";
-import "./responsive.css";
-import "./boot-sync.css";
 import { viewportLayout, openingLayout } from "./viewport-layout";
 import { assetUrl, downloadProgress, FONT_PATHS, loadFont, MODEL_PATHS, preloadAsset } from "./asset-url";
 import {
@@ -36,7 +29,6 @@ import {
   fileLocation,
   setRecords,
 } from "./data";
-import "./astrhe/astrhe.css";
 import { apiGet, apiPost } from "./astrhe/bridge";
 import { configureFormat, parseJson } from "./astrhe/format";
 import { buildRecords, type Overview } from "./astrhe/records";

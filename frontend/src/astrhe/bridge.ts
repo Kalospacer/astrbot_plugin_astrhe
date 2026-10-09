@@ -2,10 +2,17 @@
  * AstrBot 插件页面桥接：页面在沙盒 iframe 里，只能通过父页面转发调用插件 Web API。
  * endpoint 相对插件名（例如 "overview" → /astrbot_plugin_astrhe/overview）。
  */
+interface PanelContext {
+  isDark?: boolean;
+  locale?: string;
+}
+
 interface PluginPageBridge {
   ready(): Promise<unknown>;
   apiGet(endpoint: string, params?: Record<string, unknown>): Promise<unknown>;
   apiPost(endpoint: string, body?: unknown): Promise<unknown>;
+  /** 面板的亮暗、语言等上下文；面板切换主题时会再推送一次 */
+  onContext?(handler: (context: PanelContext) => void): () => void;
 }
 
 declare global {
@@ -22,20 +29,25 @@ function bridge() {
   return instance;
 }
 
-function withTimeout<T>(pending: Promise<T>, what: string) {
+function withTimeout<T>(pending: Promise<T>, what: string, timeout = TIMEOUT_MS) {
   let timer: ReturnType<typeof setTimeout>;
   return Promise.race([
     pending,
     new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`${what}超时，请检查 AstrBot 是否在运行`)), TIMEOUT_MS);
+      timer = setTimeout(() => reject(new Error(`${what}超时，请检查 AstrBot 是否在运行`)), timeout);
     }),
   ]).finally(() => clearTimeout(timer));
 }
 
-export function apiGet<T>(endpoint: string, params?: Record<string, unknown>) {
-  return withTimeout(bridge().apiGet(endpoint, params) as Promise<T>, "读取档案");
+export function apiGet<T>(endpoint: string, params?: Record<string, unknown>, timeout?: number) {
+  return withTimeout(bridge().apiGet(endpoint, params) as Promise<T>, "读取档案", timeout);
 }
 
 export function apiPost<T>(endpoint: string, body?: unknown) {
   return withTimeout(bridge().apiPost(endpoint, body) as Promise<T>, "提交操作");
+}
+
+/** 订阅面板上下文（已有上下文时立即回调一次）；没有桥接对象时什么也不做。 */
+export function onPanelContext(handler: (context: PanelContext) => void) {
+  return window.AstrBotPluginPage?.onContext?.(handler);
 }

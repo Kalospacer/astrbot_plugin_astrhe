@@ -4,16 +4,22 @@ import { parseJson } from "./format";
 
 type Row = Record<string, unknown>;
 
-export function personEditorMarkup(person: Row) {
+/** 编辑表单里各字段的初始文字（别名用顿号连接，纪念日每行一条）。 */
+export function personFormValues(person: Row) {
   const qq = String(person.qq ?? "");
   const aliases = parseJson<string[]>(person.aliases_json, []).join("、");
   const anniversaries = parseJson<Row[]>(person.anniversaries_json, [])
     .map((a) => `${a.name ?? ""} ${a.date ?? ""}`.trim())
     .join("\n");
+  return { qq, aliases, relation: String(person.relation_text ?? ""), anniversaries };
+}
+
+export function personEditorMarkup(person: Row) {
+  const { qq, aliases, relation, anniversaries } = personFormValues(person);
   return `<h2>EDIT RELATION<small>编辑关系层 · QQ ${escapeHtml(qq)}</small></h2>
   <form class="astrhe-form" data-person="${escapeHtml(qq)}">
     <label><span>ALIASES / 别名</span><input name="aliases" autocomplete="off" value="${escapeHtml(aliases)}" placeholder="多个别名用顿号或逗号分隔"/></label>
-    <label><span>RELATION / 关系层</span><textarea name="relation_text" rows="7" placeholder="是谁、和 bot 是什么关系、怎么称呼">${escapeHtml(String(person.relation_text ?? ""))}</textarea></label>
+    <label><span>RELATION / 关系层</span><textarea name="relation_text" rows="7" placeholder="是谁、和 bot 是什么关系、怎么称呼">${escapeHtml(relation)}</textarea></label>
     <label><span>ANNIVERSARIES / 纪念日</span><textarea name="anniversaries" rows="3" placeholder="每行一条，例如：生日 10-11">${escapeHtml(anniversaries)}</textarea></label>
     <p class="astrhe-form-note">近况层由夜间复盘自动维护，这里不改。保存后夜间复盘会读到新的关系层。</p>
     <p class="astrhe-form-error" role="alert" hidden></p>

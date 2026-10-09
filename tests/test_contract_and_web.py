@@ -17,11 +17,56 @@ from tests.conftest import FakeContext, FakeEvent, FakeLogger, Plain, arun, make
 def test_version_and_only_approved_settings():
     root = Path(__file__).resolve().parents[1]
     metadata = yaml.safe_load((root / "metadata.yaml").read_text())
-    assert str(metadata["version"]) == "0.1.1" and "astrbot_version" not in metadata
+    assert str(metadata["version"]) == "0.2.0" and "astrbot_version" not in metadata
     settings = json.loads((root / "_conf_schema.json").read_text())
-    assert set(settings) == {"enabled", "provider_id", "persona_id"}
+    assert set(settings) == {
+        "enabled",
+        "provider_id",
+        "persona_id",
+        "frontend_landscape",
+        "frontend_portrait",
+    }
     assert settings["persona_id"]["_special"] == "select_persona"
     assert settings["persona_id"]["default"] == ""
+    for key, default in (
+        ("frontend_landscape", "SOUL OS"),
+        ("frontend_portrait", "NORMAL"),
+    ):
+        assert settings[key]["type"] == "string"
+        assert settings[key]["options"] == ["SOUL OS", "NORMAL"]
+        assert settings[key]["default"] == default
+
+
+@pytest.mark.parametrize(
+    "getter, expected",
+    [
+        (None, {"landscape": "SOUL OS", "portrait": "NORMAL"}),
+        (lambda: (None, "乱填"), {"landscape": "SOUL OS", "portrait": "NORMAL"}),
+        (lambda: ("NORMAL", "SOUL OS"), {"landscape": "NORMAL", "portrait": "SOUL OS"}),
+    ],
+    ids=["未传读取函数", "非法值回退默认", "正常值"],
+)
+def test_web_frontend_choice(tmp_path, monkeypatch, getter, expected):
+    async def check():
+        import astrhe.webapi as module
+
+        monkeypatch.setattr(
+            module, "astrbot_web", SimpleNamespace(json_response=lambda value: value)
+        )
+        s = await make_storage(tmp_path)
+        try:
+            api = WebApi(
+                s,
+                FakeContext(),
+                lambda: ZoneInfo("Asia/Shanghai"),
+                lambda: {},
+                frontend_getter=getter,
+            )
+            assert await api._frontend() == expected
+        finally:
+            await s.close()
+
+    arun(check())
 
 
 @pytest.mark.parametrize(
