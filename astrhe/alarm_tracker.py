@@ -4,6 +4,7 @@
 - 手动提前执行记 manual_run 事件；一次性闹钟开始执行即停用平台任务，避免面板立即执行后到点再跑一次。
 - 完整回流窗口内的执行、发送失败、缺失和中断；触发一小时内不判中断。
 - 停机错过的一次性闹钟、平台任务已消失的重复闹钟，判为失踪并删掉残留任务。
+- 唤醒时同时核对闹钟编号与平台任务编号；插件数据重置后遗留的旧任务不认，对账时删掉。
 """
 
 from __future__ import annotations
@@ -30,22 +31,32 @@ class AlarmTracker:
 
     # ---------------- 钩子入口（由 main.py 转发） ----------------
 
-    @staticmethod
-    def _alarm_id_from_event(event: Any) -> str:
+    async def _alarm_for_event(self, event: Any) -> dict | None:
+        """找出唤醒事件对应的 AstrHe 闹钟。
+
+        插件数据被删除重建后，旧平台任务里的闹钟编号会撞上新闹钟，
+        所以还要核对平台任务编号，对不上就不认，免得把新闹钟误标执行、误停任务。
+        """
         extras = getattr(event, "_extras", None) or {}
         if not isinstance(extras, dict):
-            return ""
+            return None
         payload = extras.get("cron_payload")
-        if isinstance(payload, dict) and payload.get("astrhe_alarm_id"):
-            return str(payload["astrhe_alarm_id"])
-        return ""
+        if not isinstance(payload, dict) or not payload.get("astrhe_alarm_id"):
+            return None
+        alarm = await self.storage.alarms.get_by_alarm_id_str(
+            str(payload["astrhe_alarm_id"])
+        )
+        if alarm is None:
+            return None
+        cron_job = extras.get("cron_job")
+        job_id = str(cron_job.get("id") or "") if isinstance(cron_job, dict) else ""
+        if job_id and job_id != alarm["cron_job_id"]:
+            return None
+        return alarm
 
     async def on_agent_begin(self, event: Any) -> None:
         """闹钟唤醒开始。"""
-        alarm_id = self._alarm_id_from_event(event)
-        if not alarm_id:
-            return
-        alarm = await self.storage.alarms.get_by_alarm_id_str(alarm_id)
+        alarm = await self._alarm_for_event(event)
         if alarm is None:
             return
         # 立即执行识别
@@ -72,10 +83,10 @@ class AlarmTracker:
         self, event: Any, tool: Any, tool_args: Any, tool_result: Any
     ) -> None:
         """记录 send_message_to_user 的独立发送结果，不覆盖生命周期。"""
-        alarm_id = self._alarm_id_from_event(event)
-        if not alarm_id:
-            return
         if getattr(tool, "name", "") != "send_message_to_user":
+            return
+        alarm = await self._alarm_for_event(event)
+        if alarm is None:
             return
         text = ""
         try:
@@ -83,9 +94,6 @@ class AlarmTracker:
             text = " ".join(str(getattr(c, "text", "")) for c in content)
         except Exception:  # noqa: BLE001
             text = str(tool_result or "")
-        alarm = await self.storage.alarms.get_by_alarm_id_str(alarm_id)
-        if alarm is None:
-            return
         if _SEND_OK_PREFIX in text:
             await self.storage.alarms.add_event(
                 alarm["id"], "send_ok", json.dumps(tool_args, ensure_ascii=False)
@@ -99,10 +107,7 @@ class AlarmTracker:
 
     async def on_agent_done(self, event: Any) -> None:
         """正常结束 → done。"""
-        alarm_id = self._alarm_id_from_event(event)
-        if not alarm_id:
-            return
-        alarm = await self.storage.alarms.get_by_alarm_id_str(alarm_id)
+        alarm = await self._alarm_for_event(event)
         if alarm is None:
             return
         if alarm["status"] == "fired":
@@ -179,12 +184,42 @@ class AlarmTracker:
                     self.logger.debug(f"[AstrHe] 删除残留任务失败: {exc}")
         return lost
 
+    async def drop_orphan_jobs(self, jobs: dict, jobs_ok: bool) -> list[str]:
+        """删掉带 AstrHe 闹钟编号、却对不上任何现有闹钟的平台任务。
+
+        插件数据被删除重建后，旧闹钟的平台任务还留在 AstrBot 里，到点会照旧执行，
+        和新计划重复；它们是 AstrHe 自己建的，对账时一并清掉。
+        """
+        if not jobs_ok:
+            return []
+        dropped = []
+        for job_id, job in list(jobs.items()):
+            alarm_id = (job.payload or {}).get("astrhe_alarm_id")
+            if not alarm_id:
+                continue
+            alarm = await self.storage.alarms.get_by_alarm_id_str(str(alarm_id))
+            if alarm is not None and alarm["cron_job_id"] == job_id:
+                continue
+            try:
+                await self.context.cron_manager.delete_job(job_id)
+            except Exception as exc:  # noqa: BLE001
+                self.logger.debug(f"[AstrHe] 删除遗留平台任务失败: {exc}")
+                continue
+            jobs.pop(job_id, None)
+            dropped.append(f"「{job.name}」（{job_id}）")
+        if dropped:
+            self.logger.info(
+                f"[AstrHe] 删除遗留平台任务 {len(dropped)} 个：{'、'.join(dropped)}"
+            )
+        return dropped
+
     async def nightly_reconcile(self, window_start=0, window_end=None) -> str:
         """完整回流窗口内触发或应触发的闹钟，发送结果独立于生命周期。"""
         await self.finalize_stale_started()
         now = utc_now() if window_end is None else window_end
         tz = self._tz_getter()
         cron_jobs, jobs_ok = await self._list_jobs()
+        dropped = await self.drop_orphan_jobs(cron_jobs, jobs_ok)
         # 不限于本窗口：停机错过的闹钟可能早于窗口起点，也要一次结清。
         lost = await self.finish_lost_alarms(cron_jobs, jobs_ok)
         lines = []
@@ -237,8 +272,14 @@ class AlarmTracker:
                 f"#{alarm['id']} → {alarm['target_umo']}（原定 {when}）："
                 + "；".join(details)
             )
-        return (
+        text = (
             "闹钟对账：\n" + "\n".join(lines)
             if lines
             else "对账完成：窗口内没有触发或应触发的闹钟"
         )
+        if dropped:
+            text += (
+                "\n已删除遗留的平台任务（带 AstrHe 闹钟编号，但对不上现有的 AstrHe 闹钟，"
+                "多半是插件数据被重置过）：" + "、".join(dropped)
+            )
+        return text

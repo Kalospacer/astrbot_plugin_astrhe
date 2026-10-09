@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from astrhe.alarm_tracker import AlarmTracker
 from astrhe.night.draft import CommitError, DraftCommitter
 from astrhe.night.planner import Planner
 from astrhe.night.reporter import Reporter
@@ -14,7 +15,7 @@ from astrhe.timeutil import utc_now
 from astrhe.tools.alarm_card import render_card_note
 from astrhe.tools.alarm_view import platform_tasks
 from astrhe.tools.reader_tools import ReaderTools
-from tests.conftest import FakeContext, FakeEvent, arun, make_storage
+from tests.conftest import FakeContext, FakeEvent, FakeLogger, arun, make_storage
 from tests.test_alarm_round4 import UMO, seed
 from tests.test_reporter_json import HistoryLoop
 from tests.test_schedule_tool import _impl
@@ -263,6 +264,60 @@ def test_platform_tasks_show_run_time_and_external_note(tmp_path):
             assert "重复规则 0 8 * * *" in text
             astrhe_line = next(line for line in text.splitlines() if job_id in line)
             assert astrhe_line.startswith("[AstrHe]")
+        finally:
+            await s.close()
+
+    arun(check())
+
+
+def test_orphan_job_after_data_reset_is_ignored_then_dropped(tmp_path):
+    async def check():
+        s = await make_storage(tmp_path)
+        try:
+            ctx = FakeContext()
+            cron = ctx.cron_manager
+            tracker = AlarmTracker(s, ctx, lambda: TZ, FakeLogger())
+            aid, job_id = await seed(s, ctx)
+            # 数据重置前留下的旧任务：闹钟编号和新闹钟相同，平台任务却是另一个
+            old = await cron.add_active_job(
+                name=f"astrhe闹钟#{aid}",
+                cron_expression=None,
+                run_once=True,
+                payload={"astrhe_alarm_id": str(aid)},
+            )
+            ghost = await cron.add_active_job(
+                name="astrhe闹钟#9",
+                cron_expression=None,
+                run_once=True,
+                payload={"astrhe_alarm_id": "9"},
+            )
+            external = await cron.add_active_job(
+                name="外部任务", cron_expression=None, payload={"session": UMO}
+            )
+
+            def wake(cron_job_id):
+                return FakeEvent(
+                    extras={
+                        "cron_payload": {"astrhe_alarm_id": str(aid)},
+                        "cron_job": {"id": cron_job_id},
+                    }
+                )
+
+            # 旧任务到点：不认，新闹钟不被标记、平台任务不被停
+            await tracker.on_agent_begin(wake(old.job_id))
+            await tracker.on_agent_done(wake(old.job_id))
+            assert (await s.alarms.get_alarm(aid))["status"] == "scheduled"
+            assert not await s.alarms.events(aid)
+            assert cron.jobs[job_id].enabled
+            # 任务编号对得上才认
+            await tracker.on_agent_begin(wake(job_id))
+            assert (await s.alarms.get_alarm(aid))["status"] == "fired"
+
+            # 对账删掉遗留任务，自己的任务和外部任务都保留
+            text = await tracker.nightly_reconcile(0, utc_now())
+            assert old.job_id not in cron.jobs and ghost.job_id not in cron.jobs
+            assert job_id in cron.jobs and external.job_id in cron.jobs
+            assert "遗留的平台任务" in text and "astrhe闹钟#9" in text
         finally:
             await s.close()
 
