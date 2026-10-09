@@ -70,6 +70,8 @@ export const PROMISE_STATUS: Record<string, [string, string]> = {
 };
 
 const str = (value: unknown) => (typeof value === "string" ? value : value == null ? "" : String(value));
+/** 后端已解析的 JSON 字段（如出处列表）转回文字，用于查找保密段落 */
+const jsonText = (value: unknown) => (typeof value === "string" ? value : JSON.stringify(value ?? ""));
 const code3 = (code: number) => String(code).padStart(3, "0");
 
 function record(
@@ -132,7 +134,7 @@ function todoRecords(todos: Row[]) {
     .map((todo) => {
       const secretWhole = secretFromAdmin(todo.secret_from_json);
       const content = str(todo.content);
-      const secret = secretWhole || hasAdminSecret(content) || hasAdminSecret(str(todo.note));
+      const secret = secretWhole || [content, str(todo.note), jsonText(todo.evidence_json)].some(hasAdminSecret);
       const umos = parseJson<string[]>(todo.visible_umos_json, []);
       const status = TODO_STATUS[str(todo.status)] ?? [str(todo.status).toUpperCase(), str(todo.status)];
       return record("待办", "todo", Number(todo.id), {
@@ -157,7 +159,7 @@ function alarmRecords(alarms: Row[]) {
       const card = parseJson<Row>(alarm.card_json, {});
       const secretWhole = secretFromAdmin(card.secret_from);
       const cardTexts = Object.values(card).filter((v): v is string => typeof v === "string");
-      const secret = secretWhole || cardTexts.some(hasAdminSecret);
+      const secret = secretWhole || [...cardTexts, str(alarm.result_note)].some(hasAdminSecret);
       const status = ALARM_STATUS[str(alarm.status)] ?? [str(alarm.status).toUpperCase(), str(alarm.status)];
       return record("闹钟", "alarm", Number(alarm.id), {
         title: secretWhole ? "保密闹钟" : shortTitle(stripSecrets(str(card.purpose) || "（未写目的）")),
@@ -179,7 +181,7 @@ function promiseRecords(promises: Row[]) {
     .slice(0, COLUMN_LIMIT)
     .map((promise) => {
       const content = str(promise.content);
-      const secret = hasAdminSecret(content) || hasAdminSecret(str(promise.note));
+      const secret = [content, str(promise.note), jsonText(promise.evidence_json)].some(hasAdminSecret);
       const status = PROMISE_STATUS[str(promise.status)] ?? [str(promise.status).toUpperCase(), str(promise.status)];
       return record("承诺", "promise", Number(promise.id), {
         title: shortTitle(stripSecrets(content)),

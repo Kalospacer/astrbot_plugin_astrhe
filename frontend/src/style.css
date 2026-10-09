@@ -865,7 +865,8 @@ button {
   margin: 8px 0;
   color: #5a584e;
 }
-.research-notes li span {
+/* 只作用于条目编号（AstrHe 的条目正文里还有保密遮挡等 span） */
+.research-notes li > span {
   font-size: 10px;
   color: #a38e72;
   line-height: 22px;

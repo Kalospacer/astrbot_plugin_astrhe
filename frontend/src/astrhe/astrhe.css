@@ -3,7 +3,6 @@
 
 /* ---- 保密打码：墨条盖住文字，解密时自左向右退开（与正文解密同色） ---- */
 .astrhe-secret {
-  color: transparent;
   background-image: linear-gradient(#20221d, #20221d);
   background-repeat: no-repeat;
   background-position: right center;
@@ -16,11 +15,16 @@
     background-size 0.9s cubic-bezier(0.7, 0, 0.2, 1),
     color 0.35s ease 0.55s;
 }
+/* 遮挡块里的字一律透明：!important 压过所在容器（列表、日志等）给 span 定的颜色 */
+.astrhe-secret,
 .astrhe-secret * {
-  color: inherit;
+  color: transparent !important;
+}
+.astrhe-revealed .astrhe-secret,
+.astrhe-revealed .astrhe-secret * {
+  color: inherit !important;
 }
 .astrhe-revealed .astrhe-secret {
-  color: inherit;
   background-size: 0% 88%;
   user-select: text;
 }

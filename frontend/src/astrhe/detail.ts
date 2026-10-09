@@ -41,11 +41,12 @@ const masked = (html: string, whole: boolean) => (whole ? maskedHtml(html) : htm
 
 function evidenceItems(value: unknown) {
   return parseJson<unknown[]>(value, []).map((item) => {
-    if (typeof item === "string") return escapeHtml(item);
+    // 出处摘录可能带【保密】段落，同样按保密规则显示
+    if (typeof item === "string") return secretHtml(item);
     const row = (item ?? {}) as Row;
     const where = row.umo ? sessionName(str(row.umo)) : "";
     const id = row.message_id ?? row.id;
-    return escapeHtml([where, id ? `#${id}` : "", str(row.note ?? row.text)].filter(Boolean).join(" · ") || JSON.stringify(item));
+    return secretHtml([where, id ? `#${id}` : "", str(row.note ?? row.text)].filter(Boolean).join(" · ") || JSON.stringify(item));
   });
 }
 
@@ -104,7 +105,7 @@ function todoView(record: ArchiveRecord, todo: Row): DetailView {
     ],
     tabs: [
       { label: "内容", html: label("CONTENT", "待办内容") + `<p>${content}</p>` + label("NOTE", "备注与进展") + `<p>${masked(secretHtml(str(todo.note)), whole)}</p>` },
-      { label: "出处", html: label("EVIDENCE", "出处") + notes(evidenceItems(todo.evidence_json)) },
+      { label: "出处", html: label("EVIDENCE", "出处") + notes(evidenceItems(todo.evidence_json).map((item) => masked(item, whole))) },
       {
         label: "关联",
         html:
@@ -183,7 +184,7 @@ function alarmView(record: ArchiveRecord, alarm: Row, events: AlarmEvent[]): Det
         label: "结果",
         html:
           label("RESULT", "结果") +
-          text(str(alarm.result_note) || "未记录") +
+          `<p>${masked(secretHtml(str(alarm.result_note) || "未记录"), whole)}</p>` +
           notes([`平台任务 ${escapeHtml(str(alarm.cron_job_id) || "未建立")}`, `创建于 ${dateTime(Number(alarm.created_at))}`, alarm.finished_at ? `结束于 ${dateTime(Number(alarm.finished_at))}` : "仍在生效"]),
       },
     ],
