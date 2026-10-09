@@ -14,10 +14,18 @@ export const MODEL_PATHS = [
   "assets/archive-assembly.glb",
 ] as const;
 
+/** MiSans 官方整包 woff2，原样分发（许可见 public/fonts/MiSans-license.pdf）。 */
+export const FONT_PATHS = {
+  300: "fonts/MiSans-Light.woff2",
+  400: "fonts/MiSans-Regular.woff2",
+  600: "fonts/MiSans-Demibold.woff2",
+  700: "fonts/MiSans-Bold.woff2",
+} as const;
+
 const pageUrl = new URL(location.href);
 const assetToken = pageUrl.searchParams.get("asset_token");
 const preloaded = new Map<string, Promise<string>>();
-/** 开场期间后台下载的资源：已收到字节数（总量来自构建时记录的文件大小）。 */
+/** 脚本下载的资源：已收到字节数（总量来自构建时记录的文件大小）。 */
 const received = new Map<string, number>();
 
 function versioned(path: string) {
@@ -34,14 +42,14 @@ function remoteUrl(path: string) {
   return url.href;
 }
 
-async function download(path: string, priority: RequestPriority) {
+async function download(path: string, priority: RequestPriority, type: string) {
   const response = await fetch(remoteUrl(path), { priority });
   if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
   const reader = response.body?.getReader();
   if (!reader) {
     const blob = await response.blob();
     received.set(path, blob.size);
-    return URL.createObjectURL(blob);
+    return blob;
   }
   const chunks: Uint8Array<ArrayBuffer>[] = [];
   let bytes = 0;
@@ -52,7 +60,7 @@ async function download(path: string, priority: RequestPriority) {
     bytes += value.byteLength;
     received.set(path, bytes);
   }
-  return URL.createObjectURL(new Blob(chunks, { type: "model/gltf-binary" }));
+  return new Blob(chunks, { type });
 }
 
 /** 打开页面时调用：把资源整个下载进内存；失败后再次调用会重新下载。 */
@@ -60,29 +68,39 @@ export function preloadAsset(path: string, priority: RequestPriority = "auto") {
   let pending = preloaded.get(path);
   if (!pending) {
     received.set(path, 0);
-    pending = download(path, priority).catch((error) => {
-      preloaded.delete(path);
-      throw error;
-    });
+    pending = download(path, priority, "model/gltf-binary").then(
+      (blob) => URL.createObjectURL(blob),
+      (error) => {
+        preloaded.delete(path);
+        throw error;
+      },
+    );
     preloaded.set(path, pending);
   }
   return pending;
 }
 
-/** 记录后台加载的字体：完成后整份计入进度。 */
-export function trackFont<T>(loading: Promise<T>, path = "fonts/MiSans-Light.woff2") {
+/**
+ * 下载一档 MiSans 字重并交给浏览器。不用 CSS @font-face：浏览器自己下载字体时
+ * 网页拿不到进度，而加载页的百分比要按实际收到的字节计算。
+ */
+export async function loadFont(weight: keyof typeof FONT_PATHS, priority: RequestPriority = "high") {
+  const path = FONT_PATHS[weight];
   received.set(path, 0);
-  return loading.then((value) => {
-    received.set(path, __ASTRHE_ASSET_BYTES__[path] ?? 0);
-    return value;
-  });
+  const data = await (await download(path, priority, "font/woff2")).arrayBuffer();
+  const face = new FontFace("MiSans", data, { weight: String(weight), style: "normal" });
+  // 先放进字体集再等解析完成，字体集的 loadingdone 事件照常触发
+  document.fonts.add(face);
+  await face.loaded;
+  return face;
 }
 
-/** 后台资源的整体下载进度（0–1）。 */
-export function downloadProgress() {
+/** 指定资源的整体下载进度（0–1）；还没开始下载的按 0 计。 */
+export function downloadProgress(paths: readonly string[]) {
   let done = 0;
   let total = 0;
-  for (const [path, bytes] of received) {
+  for (const path of paths) {
+    const bytes = received.get(path) ?? 0;
     const size = __ASTRHE_ASSET_BYTES__[path] ?? bytes;
     total += size;
     done += Math.min(bytes, size);

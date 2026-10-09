@@ -9,11 +9,16 @@ const models = ["archive-cassette", "archive-assembly"].map((name) => {
   return { key: `assets/${name}.glb`, fileName: `assets/${name}.${hash}.glb`, source };
 });
 
-// 开场期间后台下载的资源大小，用于显示同步进度。
-const backgroundAssets = {
+// 脚本下载的资源大小，用于加载页与开场等待点按字节显示进度。
+const assetBytes = {
   "assets/archive-cassette.glb": statSync("models/archive-cassette.glb").size,
   "assets/archive-assembly.glb": statSync("models/archive-assembly.glb").size,
-  "fonts/MiSans-Light.woff2": statSync("public/fonts/MiSans-Light.woff2").size,
+  ...Object.fromEntries(
+    ["Light", "Regular", "Demibold", "Bold"].map((name) => {
+      const path = `fonts/MiSans-${name}.woff2`;
+      return [path, statSync(`public/${path}`).size];
+    }),
+  ),
 };
 
 // 产物直接写进插件的 pages/dashboard/，由 AstrBot 插件页面托管。
@@ -25,7 +30,7 @@ export default defineConfig({
     __ASTRHE_MODELS__: JSON.stringify(
       Object.fromEntries(models.map((model) => [model.key, model.fileName])),
     ),
-    __ASTRHE_ASSET_BYTES__: JSON.stringify(backgroundAssets),
+    __ASTRHE_ASSET_BYTES__: JSON.stringify(assetBytes),
   },
   build: {
     outDir: "../pages/dashboard",

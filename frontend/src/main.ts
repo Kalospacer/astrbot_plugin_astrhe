@@ -18,7 +18,7 @@ import "./quality-settings.css";
 import "./responsive.css";
 import "./boot-sync.css";
 import { viewportLayout, openingLayout } from "./viewport-layout";
-import { assetUrl, downloadProgress, MODEL_PATHS, preloadAsset, trackFont } from "./asset-url";
+import { assetUrl, downloadProgress, FONT_PATHS, loadFont, MODEL_PATHS, preloadAsset } from "./asset-url";
 import {
   createRollingNumber,
   createRollingText,
@@ -104,7 +104,7 @@ $("#stage").innerHTML = `
   <div class="powered">POWERED BY <b>ASTRHE</b><i></i></div>
   <footer class="system-footer"><span><i class="status-light"></i> SESSION AUTHORIZED</span><span>ADMINISTRATOR <i>／</i> <span id="clock">00:00:00</span></span><button data-action="replay" title="重播启动流程">REINITIALIZE ↗</button></footer>
   <div id="modal-root"></div><div id="toast" class="toast" role="status"></div>
-  <div id="loading" class="loading"><div class="loading-mark">${logoMarkup()}</div><span>CONNECTING TO NIGHTLY DATABASE</span><i></i></div>
+  <div id="loading" class="loading"><div class="loading-mark">${logoMarkup()}</div><span>CONNECTING TO NIGHTLY DATABASE</span><div class="loading-progress" role="progressbar" aria-label="加载进度"><i></i><span id="loading-value">00%</span></div></div>
 `;
 
 $("#boot-background").insertAdjacentHTML(
@@ -1208,6 +1208,9 @@ function bindScene(scene: ArchiveScene, cell?: { lane: number; row: number }) {
 }
 // 开场「START PROCESSING...」三个点出全的那一帧（原片第 476 帧）：资源未到齐时在这里等。
 const BOOT_HOLD = 476 / 25 - 5;
+// 加载页只等开场要用的三档字重；细体与模型在开场期间后台下载（等待点显示它们的进度）。
+const OPENING_WEIGHTS = [400, 600, 700] as const;
+const BACKGROUND_ASSETS = [...MODEL_PATHS, FONT_PATHS[300]];
 let skipRequested = false;
 let syncVisible = false;
 
@@ -1217,7 +1220,7 @@ function showSync(visible: boolean) {
   const sync = $("#boot-sync");
   sync.hidden = !visible;
   if (!visible) return;
-  const value = Math.round(downloadProgress() * 100);
+  const value = Math.round(downloadProgress(BACKGROUND_ASSETS) * 100);
   sync.style.setProperty("--sync", String(value / 100));
   $("#boot-sync-value").textContent = `${String(value).padStart(2, "0")}%`;
 }
@@ -1389,17 +1392,15 @@ document.addEventListener("submit", (e) => {
 
 async function start() {
   // 插件页面的资源令牌 60 秒过期，且每次打开都要重新下载：所有资源在第一时间一起发起请求。
-  // 开场只等它要用的三档字重；模型（低优先级）和细体字在开场播放期间下载。
+  // 开场只等它要用的三档字重；模型和细体字（低优先级）在开场播放期间下载。
   const models = MODEL_PATHS.map((path) => preloadAsset(path, "low"));
   models.forEach((model) =>
     model.catch(() => {
       /* 由 scene.load / 查看器负责报错或重试 */
     }),
   );
-  const openingFonts = Promise.all(
-    [400, 600, 700].map((weight) => document.fonts.load(`${weight} 20px MiSans`)),
-  );
-  const lightFont = trackFont(document.fonts.load("300 20px MiSans"));
+  const openingFonts = Promise.all(OPENING_WEIGHTS.map((weight) => loadFont(weight)));
+  const lightFont = loadFont(300, "low");
   // 开场被关闭或在调试回放时，照原版先等资源全部到齐。
   const streaming =
     motionActive("boot") &&
@@ -1409,6 +1410,11 @@ async function start() {
   archive.catch(() => {
     /* 下面 await 时统一报错 */
   });
+  trackLoading(
+    streaming
+      ? OPENING_WEIGHTS.map((weight) => FONT_PATHS[weight])
+      : [...Object.values(FONT_PATHS), ...MODEL_PATHS],
+  );
   try {
     try {
       await archive;
@@ -1437,9 +1443,23 @@ async function start() {
     showFatal();
   }
 }
+/** 加载页进度：按已收到的字节显示，最多到 99%；数据与解析都就绪、真正进入时才到 100%。 */
+function trackLoading(paths: readonly string[]) {
+  const tick = () => {
+    if (started || !loading.isConnected) return;
+    showLoadingProgress(Math.floor(Math.min(downloadProgress(paths), 0.99) * 100));
+    requestAnimationFrame(tick);
+  };
+  tick();
+}
+function showLoadingProgress(value: number) {
+  loading.style.setProperty("--progress", String(value / 100));
+  $("#loading-value").textContent = `${String(value).padStart(2, "0")}%`;
+}
 function completeStartup() {
   if (started) return;
   started = true;
+  showLoadingProgress(100);
   const fade = motionActive("boot") ? 600 : 0;
   bootStart =
     performance.now() / 1000 -

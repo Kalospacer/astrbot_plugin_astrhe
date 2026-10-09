@@ -1,6 +1,0 @@
-/* MiSans 官方整包 woff2，原样分发（许可见 public/fonts/MiSans-license.pdf）。
-   插件页面资源令牌 60 秒过期，不用按需切片加载；启动时由 main.ts 强制加载四档字重。 */
-@font-face{font-family:"MiSans";font-style:normal;font-weight:300;font-display:swap;src:url("/fonts/MiSans-Light.woff2") format("woff2")}
-@font-face{font-family:"MiSans";font-style:normal;font-weight:400;font-display:swap;src:url("/fonts/MiSans-Regular.woff2") format("woff2")}
-@font-face{font-family:"MiSans";font-style:normal;font-weight:600;font-display:swap;src:url("/fonts/MiSans-Demibold.woff2") format("woff2")}
-@font-face{font-family:"MiSans";font-style:normal;font-weight:700;font-display:swap;src:url("/fonts/MiSans-Bold.woff2") format("woff2")}
