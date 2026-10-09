@@ -157,3 +157,7 @@ SECRET_MARK_CLOSE = "【/保密】"
 
 #: 数据库文件名
 DB_FILENAME = "astrhe.db"
+
+# ---------------- 查看页 ----------------
+#: 档案阵列每列最多展示的条目数（阵列每列 32 行，档案占第 12–31 行）
+DASHBOARD_COLUMN_LIMIT = 20

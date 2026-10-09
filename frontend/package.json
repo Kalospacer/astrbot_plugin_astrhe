@@ -1,0 +1,24 @@
+{
+  "name": "astrhe-dashboard",
+  "version": "0.1.1",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "postinstall": "node scripts/patch-rolling-number.mjs",
+    "dev": "vite --host 127.0.0.1",
+    "typecheck": "tsc",
+    "build": "node scripts/patch-rolling-number.mjs && tsc && vite build"
+  },
+  "dependencies": {
+    "@kitlangton/rolling-number": "0.4.1",
+    "three": "^0.183.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.183.0",
+    "prettier": "^3.9.6",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.1"
+  },
+  "description": "AstrHe 档案终端：基于 RhineLabUI（MIT）复刻的 AstrBot 插件页面"
+}

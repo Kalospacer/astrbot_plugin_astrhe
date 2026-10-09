@@ -1,0 +1,256 @@
+/* AstrHe 新增元素：保密打码与解密、运行记录、编辑表单、可变数量的档案刻度。
+   颜色与字号沿用 RhineLabUI 的详情页与弹窗。 */
+
+/* ---- 保密打码：墨条盖住文字，解密时自左向右退开（与正文解密同色） ---- */
+.astrhe-secret {
+  color: transparent;
+  background-image: linear-gradient(#20221d, #20221d);
+  background-repeat: no-repeat;
+  background-position: right center;
+  background-size: 100% 88%;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  border-radius: 1px;
+  user-select: none;
+  transition:
+    background-size 0.9s cubic-bezier(0.7, 0, 0.2, 1),
+    color 0.35s ease 0.55s;
+}
+.astrhe-secret * {
+  color: inherit;
+}
+.astrhe-revealed .astrhe-secret {
+  color: inherit;
+  background-size: 0% 88%;
+  user-select: text;
+}
+.reduce-motion .astrhe-secret {
+  transition: none;
+}
+/* 对别人保密的段落：正常显示，加一条细虚线提示 */
+.astrhe-secret-note {
+  border-bottom: 1px dashed #a27849;
+  cursor: help;
+}
+
+/* ---- 解密按钮：放在档案编号行右侧 / 运行记录顶部 ---- */
+.astrhe-decrypt {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  letter-spacing: 1.4px;
+  color: #20221d;
+  border: 1px solid #20221d;
+  padding: 5px 10px 5px 8px;
+  transition:
+    background 0.2s,
+    color 0.2s;
+}
+.astrhe-decrypt i {
+  width: 6px;
+  height: 6px;
+  background: #a27849;
+}
+.astrhe-decrypt span {
+  letter-spacing: 0.4px;
+}
+.astrhe-decrypt:hover {
+  background: #20221d;
+  color: #f0eee5;
+}
+.astrhe-revealed .astrhe-decrypt,
+.astrhe-decrypt[aria-pressed="true"] {
+  border-color: #b6b0a3;
+  color: #8f897d;
+  pointer-events: none;
+}
+
+/* ---- 详情页列表里的小标题 ---- */
+.tab-panel p + .panel-label,
+.tab-panel ol + .panel-label {
+  margin-top: 24px;
+}
+.research-notes li b {
+  color: #24261f;
+  font-weight: 600;
+}
+.research-notes li > :last-child {
+  min-width: 0;
+}
+.log-row b {
+  max-width: 58%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+}
+.solid-button:disabled {
+  background: #9c988c;
+  cursor: default;
+}
+
+/* ---- 档案刻度：超过 8 份时变细变密，总宽度与原版 8 根一致 ---- */
+.file-ticks[data-dense] {
+  gap: 0;
+  width: 196px;
+}
+.file-ticks[data-dense] button {
+  width: calc(196px / var(--ticks));
+}
+.file-ticks[data-dense] button:before {
+  left: calc(50% - 1px);
+}
+
+/* ---- 小号弹窗：编辑关系层、操作确认 ---- */
+.terminal-modal.astrhe-compact {
+  width: 760px;
+  height: auto;
+  max-height: 836px;
+  overflow: auto;
+}
+.astrhe-form {
+  display: grid;
+  gap: 22px;
+  margin-top: 8px;
+}
+.astrhe-form label {
+  display: grid;
+  gap: 10px;
+}
+.astrhe-form label > span {
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: #807b70;
+}
+.astrhe-form input,
+.astrhe-form textarea {
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.7;
+  color: #24261f;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid #c2bdb1;
+  padding: 6px 0;
+  resize: vertical;
+  outline: none;
+}
+.astrhe-form input:focus,
+.astrhe-form textarea:focus {
+  border-bottom-color: #24261f;
+}
+.astrhe-form-note,
+.astrhe-confirm-text {
+  font-size: 13px;
+  line-height: 1.8;
+  color: #5a584e;
+  margin: 0;
+}
+.astrhe-confirm-text {
+  font-size: 15px;
+  margin: 18px 0 26px;
+}
+.astrhe-form-error {
+  font-size: 12px;
+  color: #9b3b26;
+  margin: 0;
+}
+
+/* ---- 夜间运行记录详情 ---- */
+.astrhe-run-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 22px 0 6px;
+}
+.astrhe-run-back {
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+.astrhe-run-back span {
+  margin-left: 10px;
+  color: #888074;
+  letter-spacing: 0;
+}
+.astrhe-run-detail {
+  max-height: 500px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #bbb4a6 transparent;
+  padding-right: 10px;
+}
+.astrhe-run-detail h3 {
+  font-size: 11px;
+  letter-spacing: 1.2px;
+  font-weight: 400;
+  color: #24261f;
+  border-bottom: 1px solid #c2bdb1;
+  padding-bottom: 10px;
+  margin: 28px 0 0;
+}
+.astrhe-run-detail h3 small {
+  float: right;
+  color: #888074;
+}
+.astrhe-run-block {
+  padding: 16px 0;
+  border-bottom: 1px solid #dcd7cb;
+}
+.astrhe-run-block h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #24261f;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.astrhe-run-block h4 em {
+  font-style: normal;
+  font-weight: 400;
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: #9b3b26;
+}
+.astrhe-run-block h4 em.ok {
+  color: #888074;
+}
+.astrhe-run-block p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.8;
+  color: #5a584e;
+  white-space: normal;
+}
+.astrhe-run-block dl {
+  margin: 10px 0 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 18px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #5a584e;
+}
+.astrhe-run-block dt {
+  color: #888074;
+  font-size: 10px;
+  letter-spacing: 0.6px;
+  grid-column: 1;
+}
+.astrhe-run-block dd {
+  margin: 0;
+  grid-column: 2;
+}
+.astrhe-run-facts dt {
+  padding-top: 2px;
+}
+.astrhe-run-error {
+  margin-top: 10px !important;
+  color: #9b3b26 !important;
+}
+.astrhe-run-empty {
+  font-size: 12px;
+  color: #888074;
+  margin: 14px 0;
+}

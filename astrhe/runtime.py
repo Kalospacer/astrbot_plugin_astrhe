@@ -74,7 +74,9 @@ class AstrHeRuntime:
         )
         self.alarm_tracker = AlarmTracker(self.storage, context, self.tz, logger)
         self.scheduler = NightScheduler(self.storage, self.tz, self.run_night, logger)
-        self.webapi = WebApi(self.storage, context, self.tz, self.status_dict)
+        self.webapi = WebApi(
+            self.storage, context, self.tz, self.status_dict, self.admins
+        )
 
         self._external_tasks: set[asyncio.Task] = set()
         self._tools_registered = False

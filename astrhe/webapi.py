@@ -7,8 +7,11 @@
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
 from typing import Any
 
+from . import constants as C
 from .tools.validation import validate_anniversaries
 from .timeutil import local_datetime_str, utc_now
 from .memory_webapi import MemoryWebApi
@@ -21,12 +24,28 @@ except Exception:  # pragma: no cover
 ROUTE_BASE = "/astrbot_plugin_astrhe"
 
 
+def _plugin_version() -> str:
+    """查看页显示的版本号，唯一来源是 metadata.yaml。"""
+    try:
+        text = (Path(__file__).resolve().parents[1] / "metadata.yaml").read_text(
+            encoding="utf-8"
+        )
+    except OSError:
+        return "unknown"
+    match = re.search(r"^version:\s*(\S+)", text, re.MULTILINE)
+    return match.group(1) if match else "unknown"
+
+
 class WebApi:
-    def __init__(self, storage: Any, context: Any, tz_getter, runtime_status):
+    def __init__(
+        self, storage: Any, context: Any, tz_getter, runtime_status, admins_getter=None
+    ):
         self.storage = storage
         self.context = context
         self._tz_getter = tz_getter
         self._runtime_status = runtime_status  # () -> dict 运行中状态
+        # 查看页判断「对管理员保密」
+        self._admins_getter = admins_getter or (lambda: [])
         self.memory_api = MemoryWebApi(storage, lambda: astrbot_web, self._json_body)
 
     def register(self) -> None:
@@ -64,9 +83,15 @@ class WebApi:
         alarms = await self.storage.alarms.list_alarms(100)
         persons = await self.storage.persons.list_persons()
         promises = await self.storage.plans.list_promises(100)
+        alarm_events = {
+            str(a["id"]): await self.storage.alarms.events(a["id"]) for a in alarms
+        }
         return astrbot_web.json_response(
             {
                 "now": local_datetime_str(utc_now(), tz),
+                "timezone": str(tz),
+                "version": _plugin_version(),
+                "admins": list(self._admins_getter()),
                 "runtime": self._runtime_status(),
                 "latest_plan": (
                     {
@@ -81,6 +106,11 @@ class WebApi:
                     else None
                 ),
                 "plans": await self.storage.plans.list_plans(30),
+                # 档案阵列的规划书列：每份的全文与段落（与每列上限一致）
+                "plan_details": await self.storage.plans.list_plan_details(
+                    C.DASHBOARD_COLUMN_LIMIT
+                ),
+                "alarm_events": alarm_events,
                 "todos": [
                     self._json_fields(
                         t, ("visible_umos_json", "secret_from_json", "evidence_json")

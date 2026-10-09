@@ -1,0 +1,36 @@
+/* 开场等待点：资源未到齐时在身份验证文字下方显示同步进度（AstrHe 新增）。 */
+.boot-sync {
+  position: absolute;
+  left: 959px;
+  top: 572px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  white-space: nowrap;
+  color: currentColor;
+  opacity: 0.72;
+}
+.boot-sync[hidden] {
+  display: none;
+}
+.boot-sync i {
+  position: relative;
+  width: 180px;
+  height: 2px;
+  background: color-mix(in srgb, currentColor 18%, transparent);
+  overflow: hidden;
+}
+.boot-sync b {
+  position: absolute;
+  inset: 0;
+  background: currentColor;
+  transform-origin: left center;
+  transform: scaleX(var(--sync, 0));
+  transition: transform 0.24s ease-out;
+}
+.boot-sync span:last-child {
+  font-variant-numeric: tabular-nums;
+  min-width: 3.2em;
+}

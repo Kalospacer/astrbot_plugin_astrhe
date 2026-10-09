@@ -67,6 +67,21 @@ class PlansRepo:
             (limit, offset),
         )
 
+    async def list_plan_details(self, limit: int) -> list[dict[str, Any]]:
+        """查看页：最近几份规划书的全文、反思、白天提醒与按会话段落。"""
+        rows = await self.db.fetchall(
+            "SELECT id, run_id, plan_date, full_text, reflection, day_reminders,"
+            " created_at, updated_at FROM plans WHERE deleted_at IS NULL"
+            " ORDER BY plan_date DESC LIMIT ?",
+            (limit,),
+        )
+        plans = []
+        for row in rows:
+            plan = dict(row)
+            plan["sections"] = await self.get_sections(plan["id"])
+            plans.append(plan)
+        return plans
+
     async def get_sections(self, plan_id: int) -> dict[str, str]:
         rows = await self.db.fetchall(
             "SELECT s.umo,s.text FROM plan_sections s JOIN plans p ON p.id=s.plan_id"

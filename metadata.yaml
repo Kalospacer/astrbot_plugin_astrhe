@@ -6,3 +6,6 @@ author: C₂₂H₂₅NO₆
 repo: https://github.com/Sisyphbaous-DT-Project/astrbot_plugin_astrhe
 support_platforms:
   - aiocqhttp
+pages:
+  - name: dashboard
+    title: AstrHe 档案终端
