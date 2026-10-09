@@ -1,6 +1,7 @@
 """夜间闹钟分层展示；完整字段不截断，历史列表用分页。"""
 
 import json
+from datetime import datetime
 
 from .. import constants as C
 from ..storage.alarms import is_live_alarm
@@ -106,7 +107,26 @@ async def night_alarm_materials(storage, tz, admins=()):
     return "\n".join(lines)
 
 
-async def platform_tasks(storage, context):
+def job_schedule_text(job, tz) -> str:
+    """平台任务的执行时间：一次性任务取 payload.run_at（AstrBot 建任务时写入），
+    重复任务给出重复规则。名字只是标签，主 agent 要按这里的时间判断会不会撞车。"""
+    if job.cron_expression and not job.run_once:
+        return f"重复规则 {job.cron_expression}"
+    raw = (job.payload or {}).get("run_at")
+    if not raw:
+        return "执行时间未知"
+    try:
+        dt = datetime.fromisoformat(str(raw))
+    except ValueError:
+        return f"执行时间 {raw}"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=tz)
+    ts = dt.timestamp()
+    passed = "（已过）" if ts < utc_now() else ""
+    return f"执行时间 {local_datetime_str(ts, tz)}{passed}"
+
+
+async def platform_tasks(storage, context, tz):
     cron = getattr(context, "cron_manager", None)
     if cron is None:
         return ""
@@ -115,11 +135,21 @@ async def platform_tasks(storage, context):
     except Exception as exc:
         return f"读取平台当前任务失败：{exc}"
     ids = {a["cron_job_id"] for a in await storage.alarms.list_alarms(-1)}
-    return "【平台当前任务】\n" + "\n".join(
-        f"[{'AstrHe' if j.job_id in ids else '外部'}] {j.job_id}「{j.name}」"
-        f"→ {(j.payload or {}).get('session', '')} enabled={j.enabled} run_once={j.run_once}"
-        for j in jobs
-    )
+    lines = []
+    for j in jobs:
+        payload = j.payload or {}
+        line = (
+            f"[{'AstrHe' if j.job_id in ids else '外部'}] {j.job_id}「{j.name}」"
+            f"→ {payload.get('session', '')}；{job_schedule_text(j, tz)}；"
+            f"enabled={j.enabled} run_once={j.run_once}"
+        )
+        if j.job_id not in ids:
+            # AstrHe 闹钟的完整卡片在上面；外部任务只有这里，附上说明避免凭名字猜用途
+            note = str(payload.get("note") or j.description or "").replace("\n", " ")
+            if note:
+                line += f"\n    说明：{note}"
+        lines.append(line)
+    return "【平台当前任务】（外部任务以这里的执行时间和说明为准）\n" + "\n".join(lines)
 
 
 async def read_alarms(
@@ -152,5 +182,5 @@ async def read_alarms(
             lines.append(
                 f"还有更多，继续翻传 scope={scope}, offset={offset + len(page)}"
             )
-    lines.append(await platform_tasks(storage, context))
+    lines.append(await platform_tasks(storage, context, tz))
     return "\n".join(lines)

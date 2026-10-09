@@ -12,6 +12,7 @@ from astrhe.night.reporter import Reporter
 from astrhe.night.reviewer import Reviewer, is_valid_review
 from astrhe.timeutil import utc_now
 from astrhe.tools.alarm_card import render_card_note
+from astrhe.tools.alarm_view import platform_tasks
 from astrhe.tools.reader_tools import ReaderTools
 from tests.conftest import FakeContext, FakeEvent, arun, make_storage
 from tests.test_alarm_round4 import UMO, seed
@@ -173,6 +174,19 @@ def test_alarm_note_keeps_to_its_own_session():
         "default:FriendMessage:20003",
     )
     assert "只在本任务的目标会话里说话" in note
+    # 卡片到执行时刻才读：写绝对时间，醒来按当前时间换算
+    assert "绝对时间" in note and "X-1 号晚上 12 点" in note
+
+
+def test_prompts_require_absolute_time_wording():
+    from astrhe.prompts import planner as planner_prompts
+    from astrhe.prompts import reviewer as reviewer_prompts
+
+    planner = planner_prompts.build_planner_system("人格", ["10001"], "时间")
+    reviewer = reviewer_prompts.build_reviewer_system("人格", ["10001"], "全面", "时间")
+    assert "绝对日期和时刻" in planner and "X-1 号晚上 12 点" in planner
+    assert "相对说法" in reviewer and "X-1 号晚上 12 点" in reviewer
+    assert "明天" not in planner and "明天" not in reviewer
 
 
 def test_admin_can_edit_and_cancel_alarm_secret_from_himself_by_id(tmp_path):
@@ -207,6 +221,48 @@ def test_admin_can_edit_and_cancel_alarm_secret_from_himself_by_id(tmp_path):
             assert "只喊帮手" in ctx.cron_manager.jobs[job_id].payload["note"]
             assert "已取消" in await impl.run(admin, action="cancel", alarm_id=aid)
             assert job_id not in ctx.cron_manager.jobs
+        finally:
+            await s.close()
+
+    arun(check())
+
+
+def test_platform_tasks_show_run_time_and_external_note(tmp_path):
+    async def check():
+        s = await make_storage(tmp_path)
+        try:
+            ctx = FakeContext()
+            cron = ctx.cron_manager
+            # AstrBot 建一次性任务时把 run_at 写进 payload，这里按真实格式放进去
+            await cron.add_active_job(
+                name="给帮手发私信",
+                cron_expression=None,
+                run_once=True,
+                payload={
+                    "session": "default:FriendMessage:20003",
+                    "run_at": "2099-10-10T12:00:00+00:00",
+                    "note": "到点私聊帮手，邀请她一起发祝福",
+                },
+            )
+            await cron.add_active_job(
+                name="旧任务",
+                cron_expression=None,
+                run_once=True,
+                enabled=False,
+                payload={"session": UMO, "run_at": "2000-01-01T08:00:00+08:00"},
+            )
+            await cron.add_active_job(
+                name="每日早安", cron_expression="0 8 * * *", payload={"session": UMO}
+            )
+            _, job_id = await seed(s, ctx)
+            text = await platform_tasks(s, ctx, TZ)
+            # UTC 时间换算成本地时间，外部任务附完整说明
+            assert "执行时间 2099-10-10 20:00" in text
+            assert "说明：到点私聊帮手，邀请她一起发祝福" in text
+            assert "2000-01-01 08:00" in text and "（已过）" in text
+            assert "重复规则 0 8 * * *" in text
+            astrhe_line = next(line for line in text.splitlines() if job_id in line)
+            assert astrhe_line.startswith("[AstrHe]")
         finally:
             await s.close()
 

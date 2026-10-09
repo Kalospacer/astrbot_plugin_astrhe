@@ -194,7 +194,7 @@ class Planner:
         )
 
         cron_text = await night_alarm_materials(self.storage, tz, self.admins)
-        cron_text += "\n" + await platform_tasks(self.storage, self.context)
+        cron_text += "\n" + await platform_tasks(self.storage, self.context, tz)
 
         last_run_note = (
             "上一次运行失败了，今天沿用上一份计划" if last_run_failed else ""
