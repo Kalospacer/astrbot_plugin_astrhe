@@ -48,6 +48,16 @@ def test_shared_time_and_persona_prompts():
     assert "astrhe_read_reports" in prompts[2]
 
 
+def test_prompts_warn_day_reminders_reach_every_session():
+    """day_reminders 会注入所有会话（含保密对象的私聊），规划与审稿都要提醒包保密标记。"""
+    plan = planner.build_planner_system("", ["10001"], "")
+    review = reviewer.build_reviewer_system("", ["10001"], "全面")
+    for text in (plan, review):
+        assert "day_reminders" in text and "每一个会话" in text
+        assert "保密对象" in text
+    assert "明天" not in plan and "明天" not in review
+
+
 def test_materials_include_pending_notes_and_all_speakers(tmp_path):
     async def check():
         s = await make_storage(tmp_path)

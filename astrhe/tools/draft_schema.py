@@ -19,7 +19,7 @@ def build_draft_tools(owner):
                     "reflection": {"type": "string"},
                     "day_reminders": {
                         "type": "string",
-                        "description": "白天自我提醒，建议一两句",
+                        "description": "白天自我提醒，建议一两句；会注入白天的每一个会话，涉及保密的部分要包保密标记",
                     },
                 },
                 "required": ["full_text"],
