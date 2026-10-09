@@ -35,7 +35,7 @@
 
 ## 白天新增的 LLM 工具
 
-`astrhe_todo_update`（勾选待办，备注会回流次夜复盘）、`astrhe_read_plan`（翻规划书：管理员私聊里读全文，其他会话只返回与本会话相关的段落）、`astrhe_schedule`（增强定时工具，替代自带 future_task，支持指定目标会话）、`astrhe_qq_lookup`（QQ 只读查询）、`astrhe_qq_act`（贴表情、戳一戳、点赞、改签名与在线状态，均带频率上限）。
+`astrhe_todo_update`（勾选待办，备注会回流次夜复盘）、`astrhe_read_plan`（翻规划书：管理员私聊里读全文，其他会话只返回与本会话相关的段落）、`astrhe_schedule`（增强定时工具，替代自带 future_task，支持指定目标会话）、`astrhe_qq_lookup`（QQ 只读查询）、`astrhe_qq_act`（贴表情、戳一戳、点赞、改签名与在线状态，均带频率上限；个性签名所有人可见，白天与夜间复盘共用额度，7 天内最多换一次）。
 
 `astrhe_schedule` 的 `expect_friend_ids` 可由管理员标记预期联系人并当场处理已有申请；重复闹钟仅管理员或夜间主 agent 可创建，相邻至少 1 小时，深夜需约定理由。
 

@@ -302,6 +302,13 @@ class LedgerRepo:
         row = await self.db.fetchone(sql, tuple(params))
         return int(row["c"]) if row else 0
 
+    async def last_action(self, action: str) -> dict[str, Any] | None:
+        """某动作最近一次记录（target 与 ts）；没有记录返回 None。"""
+        return await self.db.fetchone(
+            "SELECT target, ts FROM action_log WHERE action=? ORDER BY ts DESC LIMIT 1",
+            (action,),
+        )
+
     async def distinct_action_targets(self, action: str, since_ts: float) -> set[str]:
         rows = await self.db.fetchall(
             "SELECT DISTINCT target FROM action_log WHERE action=? AND ts>=?",

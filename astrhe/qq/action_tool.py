@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .. import constants as C
 from ..platform import event_umo, parse_umo
 from ..timeutil import utc_now
 from .emoji_table import resolve_emoji, supported_meanings
@@ -33,7 +34,9 @@ _ACTIONS = (
     "react（给一条消息贴表情回应，message_id 不传默认当前消息，参数 emoji；emoji 可以填含义如「赞」「爱心」或编号）\n"
     "poke（戳一戳某人，参数 user_id，群里加 group_id）\n"
     "like（给某人名片点赞，参数 user_id、times（1-10））\n"
-    "signature（改我的个性签名，参数 text）\n"
+    "signature（改我的个性签名，参数 text；所有人都看得到，"
+    f"{C.RATE_SIGNATURE_INTERVAL_DAYS} 天内最多换一次，"
+    "白天和夜间复盘共用，没有值得挂出来的心情或大事就别换）\n"
     "status（改我的在线状态，参数 preset（在线/离开/忙碌/请勿打扰/Q我吧）"
     "或 wording（自定义状态文字，此时 face_id 必填））"
 )
@@ -159,7 +162,7 @@ class QQActionTool(_tool_base_class()):  # type: ignore[misc]
             if deny:
                 return deny
             await self.qq_client.call("set_self_longnick", longNick=text)
-            await self.rate_limiter.record("signature")
+            await self.rate_limiter.record("signature", target=text)
             return f"签名已改成：{text}"
         if action == "status":
             preset = str(kwargs.get("preset", "")).strip()

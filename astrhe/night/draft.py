@@ -388,15 +388,17 @@ class DraftCommitter:
         preset = payload.get("status_preset", "")
         qq = QQClient(PlatformHelper(self.context, logger))
         results = []
-        if signature:
-            if self.rate_limiter is not None:
-                deny = await self.rate_limiter.check("signature", utc_now())
-                if deny:
-                    return f"改签名被拦下：{deny}"
+        deny = ""
+        if signature and self.rate_limiter is not None:
+            deny = await self.rate_limiter.check("signature", utc_now())
+        if signature and deny:
+            # 签名被频率拦下时，同一份草稿里的在线状态照常处理
+            results.append(f"改签名被拦下：{deny}")
+        elif signature:
             try:
                 await qq.call("set_self_longnick", longNick=signature)
                 if self.rate_limiter is not None:
-                    await self.rate_limiter.record("signature")
+                    await self.rate_limiter.record("signature", target=signature)
                 results.append("签名已更新")
             except Exception as exc:  # noqa: BLE001
                 results.append(f"改签名失败：{exc}")

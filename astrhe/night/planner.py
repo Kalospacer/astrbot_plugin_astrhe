@@ -50,6 +50,25 @@ def anniversary_days_until(anniversaries: list[dict], today: datetime) -> int | 
     return best
 
 
+async def signature_material(storage: Any, tz) -> str:
+    """当前签名与下次最早可换的时间，让主 agent 别白写一份会被拦下的签名草稿。"""
+    from ..timeutil import local_datetime_str
+
+    days = C.RATE_SIGNATURE_INTERVAL_DAYS
+    last = await storage.ledger.last_action("signature")
+    if not last:
+        return f"最近没换过签名。签名 {days} 天内最多换一次，只有真碰上值得挂出来的心情或大事才换。"
+    current = f"现在挂着「{last['target']}」，" if last["target"] else ""
+    since = local_datetime_str(last["ts"], tz)
+    next_ts = float(last["ts"]) + days * 86400
+    if next_ts > utc_now():
+        return (
+            f"{current}{since} 换上的。签名 {days} 天内最多换一次，"
+            f"{local_datetime_str(next_ts, tz)} 以后才能再换，这次不要写签名草稿。"
+        )
+    return f"{current}{since} 换上的。这次可以换，但只有真碰上值得挂出来的心情或大事才换，没有就留着。"
+
+
 class Planner:
     """夜间主 agent。"""
 
@@ -180,6 +199,7 @@ class Planner:
         last_run_note = (
             "上一次运行失败了，今天沿用上一份计划" if last_run_failed else ""
         )
+        appearance_text = await signature_material(self.storage, tz)
 
         return (
             pending_text
@@ -193,6 +213,7 @@ class Planner:
                 cron_text,
                 reconcile_text,
                 last_run_note,
+                appearance_text,
             )
         )
 

@@ -90,8 +90,8 @@ RATE_POKE_GLOBAL_PER_DAY = 20
 RATE_LIKE_PER_USER_PER_DAY = 1
 RATE_LIKE_MAX_TIMES = 10
 RATE_LIKE_GLOBAL_PER_DAY = 20
-#: 改签名：每天
-RATE_SIGNATURE_PER_DAY = 2
+#: 改签名：白天夜里共用，这么多天内最多换一次（签名所有人可见，换太勤不像真人）
+RATE_SIGNATURE_INTERVAL_DAYS = 7
 #: 改在线状态：每小时
 RATE_STATUS_PER_HOUR = 2
 #: 夜间新建主动闹钟：每晚 / 同一目标每天

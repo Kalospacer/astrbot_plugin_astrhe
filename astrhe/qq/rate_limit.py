@@ -9,6 +9,7 @@ from datetime import datetime
 
 from .. import constants as C
 from ..storage import Storage
+from ..timeutil import local_datetime_str
 
 
 def _day_start_ts(now_ts: float, tz) -> float:
@@ -59,9 +60,12 @@ class RateLimiter:
             if n_all >= C.RATE_LIKE_GLOBAL_PER_DAY:
                 return "今天点赞的人数到上限了"
         elif action == "signature":
-            n = await ledger.count_actions("signature", day_start)
-            if n >= C.RATE_SIGNATURE_PER_DAY:
-                return "今天签名已经改过两次了，明天再换吧"
+            next_ts = await self.next_signature_ts()
+            if next_ts > now_ts:
+                return (
+                    f"签名 {C.RATE_SIGNATURE_INTERVAL_DAYS} 天内最多换一次，"
+                    f"{local_datetime_str(next_ts, tz)} 以后才能再换"
+                )
         elif action == "status":
             n = await ledger.count_actions("status", hour_start)
             if n >= C.RATE_STATUS_PER_HOUR:
@@ -70,6 +74,13 @@ class RateLimiter:
 
     async def record(self, action: str, *, target: str = "", umo: str = "") -> None:
         await self.storage.ledger.log_action(action, target=target, umo=umo)
+
+    async def next_signature_ts(self) -> float:
+        """最早可以再换签名的时间；从没换过返回 0。"""
+        last = await self.storage.ledger.last_action("signature")
+        if not last:
+            return 0.0
+        return float(last["ts"]) + C.RATE_SIGNATURE_INTERVAL_DAYS * 86400
 
     async def check_alarm_creation(
         self, *, origin: str, target_umo: str, creator_id: str, now_ts: float

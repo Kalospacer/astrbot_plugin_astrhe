@@ -32,11 +32,10 @@ async def _main_rate(tmp_path):
             assert await limiter.check("react", now, umo="default:GroupMessage:1") == ""
             await limiter.record("react", umo="default:GroupMessage:1")
         assert "歇" in await limiter.check("react", now, umo="default:GroupMessage:1")
-        # 签名：每天 2 次
-        for _ in range(C.RATE_SIGNATURE_PER_DAY):
-            assert await limiter.check("signature", now) == ""
-            await limiter.record("signature")
-        assert "两次" in await limiter.check("signature", now)
+        # 签名：7 天内最多换一次（白天夜里共用）
+        assert await limiter.check("signature", now) == ""
+        await limiter.record("signature", target="新签名")
+        assert "天内最多换一次" in await limiter.check("signature", now)
     finally:
         await s.close()
 

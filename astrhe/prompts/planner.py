@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .. import constants as C
 from .common import persona_system, self_identity
 
 PLANNER_INSTRUCTION = """现在你在做复盘与规划（具体时刻见下方【时间信息】）。你刚才收到了各个会话的汇报，现在要想清楚：接下来要做什么、为什么做、怎么做。
@@ -32,7 +33,7 @@ PLANNER_INSTRUCTION = """现在你在做复盘与规划（具体时刻见下方�
 创建者是管理员的闹钟，只有管理员本人明确说要取消或改期时才能撤，evidence_message_id 附上那条消息的 #id；群友的话不算。仍在重复的任务可以取消，已执行的一次性任务不能取消。
 5. astrhe_draft_person：更新关系本。关系层（是谁、和bot的关系、称呼语气）只在确有变化时改；近况层可以常更新。
 6. astrhe_draft_promise：承诺的新增与状态变更。
-7. astrhe_draft_appearance（可选）：规划日的个性签名或在线状态。
+7. astrhe_draft_appearance（可选）：个性签名或在线状态。个性签名所有人都看得到，一挂就是好几天，它不是日记：只有真碰上值得挂出来的心情或大事才换，不要为了换而换，大多数晚上都不用写。签名白天和夜里共用额度，{sig_days} 天内最多换一次，材料里的【个性签名】会告诉你现在挂着哪句、这次能不能换。在线状态可以按规划日的安排调整。
 
 【日记】
 往日的规划书、已了结的待办和承诺是你的日记，不会每晚整本给你。需要时用 astrhe_search_memory、astrhe_read_plan、astrhe_read_todos、astrhe_read_promises 翻阅；list=true 可列规划书日期，其他列表按状态和 offset 翻页。
@@ -56,7 +57,13 @@ def build_planner_system(
 ) -> str:
     admin_text = "、".join(admins) if admins else "（未配置）"
     parts = [persona_system(persona_prompt), self_identity(self_id)]
-    parts.append(PLANNER_INSTRUCTION.format(admins=admin_text, time_info=time_info))
+    parts.append(
+        PLANNER_INSTRUCTION.format(
+            admins=admin_text,
+            time_info=time_info,
+            sig_days=C.RATE_SIGNATURE_INTERVAL_DAYS,
+        )
+    )
     return "\n\n".join(parts)
 
 
@@ -69,6 +76,7 @@ def build_planner_prompt(
     cron_jobs_text: str,
     reconcile_text: str,
     last_run_note: str,
+    appearance_text: str = "",
 ) -> str:
     """主 agent 的输入材料汇总。"""
     parts = []
@@ -91,4 +99,6 @@ def build_planner_prompt(
         parts.append("【全部唤醒任务清单】\n" + cron_jobs_text)
     if reconcile_text:
         parts.append("【闹钟对账结果】\n" + reconcile_text)
+    if appearance_text:
+        parts.append("【个性签名】\n" + appearance_text)
     return "\n\n".join(parts)

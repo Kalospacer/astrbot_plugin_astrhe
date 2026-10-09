@@ -12,6 +12,7 @@ from typing import Any
 
 from .. import constants as C
 from ..platform import resolve_session_ref
+from ..timeutil import utc_now
 from .base import AstrHeFunctionTool
 from .validation import (
     validate_alarm,
@@ -349,6 +350,15 @@ class DraftTools:
         status_preset = str(kw.get("status_preset", "") or "")
         if not signature and not status_preset:
             return "signature 和 status_preset 至少给一个"
+        if signature and self._tz_getter is not None:
+            # 草稿时就告诉主 agent 换不了，免得审稿、提交后才被拦下
+            from ..qq.rate_limit import RateLimiter
+
+            deny = await RateLimiter(self.storage, self._tz_getter).check(
+                "signature", utc_now()
+            )
+            if deny:
+                return f"这次不能换签名：{deny}。不要写签名草稿；在线状态可以单独用 status_preset 改"
         return await self._add(
             "appearance",
             {"signature": signature, "status_preset": status_preset},
