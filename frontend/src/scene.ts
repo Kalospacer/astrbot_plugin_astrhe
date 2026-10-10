@@ -1569,29 +1569,33 @@ export class ArchiveScene {
         -2.05 * (1 - pan) * ease((shot - 24.2) / 0.8),
       );
     }
-    if (cinematic && shot >= 25.05 && shot <= 27.3) {
-      // Frames 760–785: the camera carries the same physical column from the
-      // right into the selected position while the neighboring crests subside.
-      const pan = ease((shot - 25.4) / 1.05);
+    // 开场镜头的对准点：让选中档案上的参考点落在参考帧（1920×1080）的 (screenX, screenY)
+    const openingAnchor = (screenX: number, screenY: number, viewSpan: number) => {
       const right = new THREE.Vector3()
         .crossVectors(new THREE.Vector3(0, 1, 0), viewDirection)
         .normalize();
       const up = new THREE.Vector3()
         .crossVectors(viewDirection, right)
         .normalize();
-      const pixelScale = 1080 / openingSpan(span);
-      const anchorAim = this.model.position
+      const pixelScale = 1080 / openingSpan(viewSpan);
+      return this.model.position
         .clone()
-        .add(new THREE.Vector3(-2.5, 3.7, 0));
-      anchorAim.addScaledVector(
-        right,
-        -(THREE.MathUtils.lerp(840, 518, pan) - 960) * openingAspect / pixelScale,
+        .add(new THREE.Vector3(-2.5, 3.7, 0))
+        .addScaledVector(right, -(screenX - 960) * openingAspect / pixelScale)
+        .addScaledVector(up, -(540 - screenY) / pixelScale);
+    };
+    if (cinematic && shot >= 25.05 && shot <= 27.3) {
+      // Frames 760–785: the camera carries the same physical column from the
+      // right into the selected position while the neighboring crests subside.
+      const pan = ease((shot - 25.4) / 1.05);
+      cameraAim.lerp(
+        openingAnchor(
+          THREE.MathUtils.lerp(840, 518, pan),
+          THREE.MathUtils.lerp(340, 288, pan),
+          span,
+        ),
+        ease((shot - 25.05) / 0.35),
       );
-      anchorAim.addScaledVector(
-        up,
-        -(540 - THREE.MathUtils.lerp(340, 288, pan)) / pixelScale,
-      );
-      cameraAim.lerp(anchorAim, ease((shot - 25.05) / 0.35));
     }
     if (cinematic && shot > 27.3) {
       const close = ease((shot - 27.3) / 6.7);
@@ -1606,19 +1610,14 @@ export class ArchiveScene {
         287,
         close,
       );
-      const pixelScale = 1080 / openingSpan(THREE.MathUtils.lerp(span, 5.9, detail));
-      const right = new THREE.Vector3()
-        .crossVectors(new THREE.Vector3(0, 1, 0), viewDirection)
-        .normalize();
-      const up = new THREE.Vector3()
-        .crossVectors(viewDirection, right)
-        .normalize();
-      const anchorAim = this.model.position
-        .clone()
-        .add(new THREE.Vector3(-2.5, 3.7, 0));
-      anchorAim.addScaledVector(right, -(screenX - 960) * openingAspect / pixelScale);
-      anchorAim.addScaledVector(up, -(540 - screenY) / pixelScale);
-      cameraAim.lerp(anchorAim, ease((shot - 27.3) / 0.5));
+      // 从上一段镜头停下的位置 (518, 288) 接着过渡，而不是从固定的 arrayAim 起步：
+      // arrayAim 不随窗口比例变化，非 16:9 窗口里两者错开，27.3 秒那一帧镜头会跳一下
+      cameraAim
+        .copy(openingAnchor(518, 288, span))
+        .lerp(
+          openingAnchor(screenX, screenY, THREE.MathUtils.lerp(span, 5.9, detail)),
+          ease((shot - 27.3) / 0.5),
+        );
     }
     const framing = archiveFraming(this.container.clientWidth, this.container.clientHeight, span, detail,
       this.container.closest<HTMLElement>("[data-layout]")?.dataset.layout === "compact");
