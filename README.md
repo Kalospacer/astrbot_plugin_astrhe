@@ -98,3 +98,7 @@
 ## 版本
 
 当前版本 **0.2.0**，详见 [CHANGELOG.md](CHANGELOG.md)。
+
+## 许可证
+
+AstrHe 自身代码采用 [GNU AGPL-3.0](LICENSE)（与 AstrBot 本体同一许可）。档案终端使用的第三方代码、字体与模型素材按各自的许可使用，不受本项目许可覆盖，详见 [`frontend/THIRD_PARTY_NOTICES.md`](frontend/THIRD_PARTY_NOTICES.md)。
