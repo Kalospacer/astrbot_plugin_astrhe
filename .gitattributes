@@ -1,0 +1,8 @@
+# GitHub 生成的源码压缩包（AstrBot 安装插件时下载的就是它）只带运行需要的文件。
+# 档案终端的前端源码、字体与模型源文件、测试仍在仓库里，构建产物在 pages/dashboard/。
+/frontend/** export-ignore
+/frontend/LICENSE-RhineLabUI -export-ignore
+/frontend/THIRD_PARTY_NOTICES.md -export-ignore
+/tests export-ignore
+# README 的大图只给 GitHub 仓库主页看：AstrBot 面板渲染 README 时不解析相对路径图片，装进插件也用不上。
+/logo-full.png export-ignore

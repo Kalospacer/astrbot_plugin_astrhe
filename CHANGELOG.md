@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2
+
+- 插件安装包从约 48.2 MB 减到约 22.6 MB（Windows 显示为 45.9 MB → 21.5 MB）：通过 `.gitattributes` 的 `export-ignore`，GitHub 生成的源码压缩包（AstrBot 安装插件时下载的就是它）不再包含 `frontend/` 下的前端源码、字体与模型源文件（构建产物 `pages/dashboard/` 里已有一份）、`tests/` 和 README 用的大图 `logo-full.png`（AstrBot 面板渲染 README 时不解析相对路径图片，仓库主页照常显示）；RhineLabUI 许可全文与第三方声明仍随包分发。仓库本身不变。
+- 档案终端的三维模型在打包时用 meshopt 无损压缩（`EXT_meshopt_compression`，不量化、不加滤波），两个模型从 7.0 MB 减到 4.0 MB，每次打开页面少下载约 3.0 MB；解码后的顶点数据与原模型逐位一致，画面不变。前端新增开发依赖 `@gltf-transform/core`、`@gltf-transform/extensions` 与 `meshoptimizer`（仅打包时使用）。
+- 档案终端随包附上第三方代码的许可原文：构建时按实际打进产物的模块，把 three.js、meshoptimizer 解码器、mdui 及其依赖（lit 系列、`@material/material-color-utilities` 等）共 18 个包的许可原文汇总为 `pages/dashboard/licenses/third-party.txt`（此前只列了名称与版权行）；`THIRD_PARTY_NOTICES.md` 注明安装包里各许可文件的位置。
+- 版本升为 0.2.2。
+
 ## 0.2.1
 
 - 修复 bot 经 `send_message_to_user` 主动发出的消息不进聊天账本的问题：定时任务唤醒后发出的消息（例如零点祝福）、平时聊天里发到别的会话的消息，发送成功后立即按目标会话记为 bot 的临时记录，夜间补拉完整覆盖后换成平台消息。此前夜间复盘看不到这些消息，会误以为 bot 没有说过。

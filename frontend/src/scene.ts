@@ -9,6 +9,7 @@ import { ThemeWave } from "./theme-motion";
 import { themeMaterial, themeEnvironment } from "./theme-material";
 import { RhythmMotion, rhythmDisplacement, quietBands, type MusicBands, type RhythmStyle } from "./archive-play-motion";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 import { createArchiveLighting, type LightingLook } from "./archive-lighting";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
@@ -57,6 +58,8 @@ const ease = (t: number) => {
   t = THREE.MathUtils.clamp(t, 0, 1);
   return t * t * t * (t * (t * 6 - 15) + 10);
 };
+/** 打包后的模型用 meshopt 无损压缩（vite.config.ts），开发服务器读的是未压缩源文件，两种都能读。 */
+const modelLoader = () => new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
 export class ArchiveScene {
   private inputEvents = new AbortController();
   private presence = 1;
@@ -341,7 +344,7 @@ export class ArchiveScene {
   async load(assetUrl?: string) {
     this.labelMark.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(labelMarkSvg)}`;
     await this.labelMark.decode();
-    const gltf = await new GLTFLoader().loadAsync(
+    const gltf = await modelLoader().loadAsync(
       assetUrl ?? (await assetSource("assets/archive-cassette.glb")),
     );
     gltf.scene.updateMatrixWorld(true);
@@ -507,7 +510,7 @@ export class ArchiveScene {
   private assemblyTemplate?: Promise<THREE.Group>;
   async createAssemblyModel() {
     this.assemblyTemplate ??= assetSource("assets/archive-assembly.glb")
-      .then((url) => new GLTFLoader().loadAsync(url))
+      .then((url) => modelLoader().loadAsync(url))
       .then((gltf) => {
         gltf.scene.updateMatrixWorld(true);
         return gltf.scene;

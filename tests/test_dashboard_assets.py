@@ -88,3 +88,64 @@ def test_every_relative_import_gets_asset_token_from_real_rewriter():
             )
     # 入口、两套前端和它们的共享 chunk 之间至少有这些静态 / 动态引用
     assert total >= 4
+
+
+def _glb_json(path: Path) -> dict:
+    import json
+    import struct
+
+    data = path.read_bytes()
+    length = struct.unpack("<I", data[12:16])[0]
+    return json.loads(data[20 : 20 + length])
+
+
+def test_models_are_meshopt_compressed_and_decoder_is_bundled():
+    models = sorted(ASSETS.glob("archive-*.glb"))
+    assert [p.name.split(".")[0] for p in models] == [
+        "archive-assembly",
+        "archive-cassette",
+    ]
+    for path in models:
+        gltf = _glb_json(path)
+        assert "EXT_meshopt_compression" in gltf.get("extensionsRequired", []), path
+        # 无损压缩：不量化，所以不需要 KHR_mesh_quantization
+        assert "KHR_mesh_quantization" not in gltf.get("extensionsUsed", []), path
+    licenses = (DASHBOARD / "licenses" / "third-party.txt").read_text(encoding="utf-8")
+    for name in (
+        "three@",
+        "meshoptimizer@",
+        "mdui@",
+        "lit-html@",
+        "material-color-utilities@",
+    ):
+        assert name in licenses, name
+    loaders = [name for name, code in _chunks().items() if ".glb" in code]
+    assert loaders and all("setMeshoptDecoder" in _chunks()[n] for n in loaders)
+
+
+def test_install_archive_skips_dev_sources_but_keeps_notices():
+    import shutil
+    import subprocess
+    import tarfile
+
+    root = DASHBOARD.parents[1]
+    if shutil.which("git") is None or not (root / ".git").exists():
+        pytest.skip("需要在 git 仓库里检查 .gitattributes")
+    # 按工作区的 .gitattributes 打包 HEAD，和 GitHub 生成源码压缩包的规则一致
+    proc = subprocess.Popen(
+        ["git", "archive", "--worktree-attributes", "--format=tar", "HEAD"],
+        cwd=root,
+        stdout=subprocess.PIPE,
+    )
+    with tarfile.open(fileobj=proc.stdout, mode="r|") as tar:
+        names = {member.name for member in tar}
+    proc.wait()
+    assert proc.returncode == 0
+    assert not any(n.startswith("tests") for n in names)
+    assert {n for n in names if n.startswith("frontend/") and not n.endswith("/")} == {
+        "frontend/LICENSE-RhineLabUI",
+        "frontend/THIRD_PARTY_NOTICES.md",
+    }
+    assert "main.py" in names and "metadata.yaml" in names and "logo.png" in names
+    assert "logo-full.png" not in names
+    assert any(n.startswith("pages/dashboard/fonts/") for n in names)
