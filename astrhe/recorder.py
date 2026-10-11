@@ -13,6 +13,9 @@ from .platform import build_umo, normalize_session_id
 from .timeutil import utc_now
 from .storage import Storage
 
+#: 装饰阶段暂存的整条回复（分段发送前的全文）
+FULL_REPLY_EXTRA_KEY = "astrhe_full_reply"
+
 #: notice 事件分类映射：(notice_type, sub_type) -> kind
 _NOTICE_KIND_MAP = {
     ("notify", "poke"): "poke",
@@ -61,6 +64,11 @@ def components_to_text(message: list) -> str:
     return "".join(parts).strip()
 
 
+def _squash(text: str) -> str:
+    """去掉空白后比较，分段插件会修剪每段首尾空白。"""
+    return "".join(text.split())
+
+
 class Recorder:
     """聊天账本记录器。"""
 
@@ -92,6 +100,24 @@ class Recorder:
         except Exception as exc:  # noqa: BLE001 - 记录器绝不影响主流程
             self.logger.debug(f"[AstrHe] 记录事件失败: {exc}")
 
+    def remember_reply(self, event: Any) -> None:
+        """on_decorating_result（排在其他装饰插件之前）：先记下整条回复。
+
+        分段插件会自己发出前几段、只把最后一段留给 AstrBot 发送，
+        after_message_sent 时结果里只剩最后一段，所以要在拆分之前记住全文。
+        """
+        try:
+            if not self._enabled() or event.get_platform_name() != "aiocqhttp":
+                return
+            result = event.get_result()
+            if result is None or not getattr(result, "chain", None):
+                return
+            text = components_to_text(result.chain)
+            if text:
+                event.set_extra(FULL_REPLY_EXTRA_KEY, text)
+        except Exception as exc:  # noqa: BLE001
+            self.logger.debug(f"[AstrHe] 暂存整条回复失败: {exc}")
+
     async def record_sent(self, event: Any) -> None:
         """after_message_sent：记录 bot 的普通回复（临时记录，夜间补拉合并）。"""
         try:
@@ -103,6 +129,12 @@ class Recorder:
             if result is None or not getattr(result, "chain", None):
                 return
             text = components_to_text(result.chain)
+            full = event.get_extra(FULL_REPLY_EXTRA_KEY)
+            event.set_extra(FULL_REPLY_EXTRA_KEY, None)
+            # 只有最后发出的确实是整条的一部分（分段）才用整条；
+            # 被后面的插件整条替换或改写过的，按实际发出的记
+            if full and text and _squash(text) in _squash(full):
+                text = full
             if not text:
                 return
             obj = event.message_obj

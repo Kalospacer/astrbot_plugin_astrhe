@@ -277,6 +277,15 @@ class FakeEvent:
     def get_platform_name(self):
         return self._platform_name
 
+    def get_self_id(self):
+        return self.message_obj.self_id
+
+    def get_extra(self, key=None, default=None):
+        return self._extras if key is None else self._extras.get(key, default)
+
+    def set_extra(self, key, value):
+        self._extras[key] = value
+
     def get_result(self):
         return self._result
 

@@ -74,6 +74,14 @@ class LedgerRepo:
             (umo, since_ts),
         )
 
+    async def bot_self_id(self) -> str:
+        """账本里最近一条 bot 消息的发送者 QQ；没有时返回空串。"""
+        row = await self.db.fetchone(
+            "SELECT sender_id FROM messages WHERE is_bot=1 AND sender_id!=''"
+            " AND sender_id NOT GLOB '*[^0-9]*' ORDER BY id DESC LIMIT 1"
+        )
+        return str(row["sender_id"]) if row else ""
+
     async def remove_bot_temps(self, umo: str, start: float, end: float) -> int:
         """仅在历史完整覆盖窗口后，用平台消息替换无 id 的临时回复。"""
         cur = await self.db.execute(

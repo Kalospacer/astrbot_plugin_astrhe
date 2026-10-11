@@ -16,6 +16,7 @@ from .qq.client import QQClient
 from .qq.friend_requests import FriendRequestManager
 from .qq.rate_limit import RateLimiter
 from .recorder import Recorder
+from .sent_tracker import SentTracker
 from .scheduler import NightScheduler
 from .storage import Storage
 from .timeutil import get_config_timezone, local_datetime_str, utc_now
@@ -73,6 +74,9 @@ class AstrHeRuntime:
             self.storage, self.tz, self.secrecy, self.enabled, logger
         )
         self.alarm_tracker = AlarmTracker(self.storage, context, self.tz, logger)
+        self.sent_tracker = SentTracker(
+            self.storage, context, self.platform, self.tz, logger, self.enabled
+        )
         self.scheduler = NightScheduler(self.storage, self.tz, self.run_night, logger)
         self.webapi = WebApi(
             self.storage,
@@ -135,6 +139,7 @@ class AstrHeRuntime:
 
     async def terminate(self) -> None:
         await self.scheduler.stop()
+        await self.sent_tracker.stop()
         # 进行中的运行由 scheduler.stop() 取消，pipeline 内部按
         # 「提交前判失败、提交后外部动作照常收尾」的规则收尾
         while self._external_tasks:

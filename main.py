@@ -45,6 +45,11 @@ class AstrHe(Star):
         """记录 bot 发出的普通回复（临时记录，夜间补拉合并）。"""
         await self.runtime.recorder.record_sent(event)
 
+    @filter.on_decorating_result(priority=sys.maxsize - 3)
+    async def remember_full_reply(self, event: AstrMessageEvent) -> None:
+        """在分段等装饰插件拆分之前记下整条回复，发送后按整条入账。"""
+        self.runtime.recorder.remember_reply(event)
+
     @filter.on_llm_request(priority=sys.maxsize - 3)
     async def inject_plan(self, event: AstrMessageEvent, req) -> None:
         """注入该会话的待办与规划段落，并隐藏自带 future_task。"""
@@ -58,6 +63,10 @@ class AstrHe(Star):
     async def track_tool_respond(
         self, event: AstrMessageEvent, tool, tool_args, tool_result
     ) -> None:
+        # sent_tracker 自己吞掉异常，放前面，不受闹钟记录出错影响
+        await self.runtime.sent_tracker.on_tool_respond(
+            event, tool, tool_args, tool_result
+        )
         await self.runtime.alarm_tracker.on_llm_tool_respond(
             event, tool, tool_args, tool_result
         )
@@ -65,6 +74,7 @@ class AstrHe(Star):
     @filter.on_agent_done()
     async def track_agent_done(self, event: AstrMessageEvent, run_context, response) -> None:
         await self.runtime.alarm_tracker.on_agent_done(event)
+        await self.runtime.sent_tracker.on_agent_done(event)
 
     # ---------------- 指令（仅管理员） ----------------
 
