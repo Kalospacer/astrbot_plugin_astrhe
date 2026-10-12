@@ -16,6 +16,7 @@ from typing import Any
 
 from .. import constants as C
 from ..prompts import reviewer as reviewer_prompts
+from ..prompts.persona import build_persona_material
 from .agent_runner import run_night_agent
 
 _CONCLUSION = re.compile(r"结论[\s*】]*[:：]?[\s*]*(通过|需要修改)")
@@ -47,6 +48,7 @@ class Reviewer:
         *,
         time_info="",
         self_id="",
+        personas=None,
     ):
         self.storage = storage
         self.context = context
@@ -56,6 +58,7 @@ class Reviewer:
         self.internal_tools = internal_tools
         self.time_info = time_info
         self.self_id = self_id
+        self.personas = personas
 
     async def review(self, run_id: int, focus: str) -> str:
         """跑一次审稿，把意见写进 reviews 表并返回意见文本。
@@ -87,8 +90,10 @@ class Reviewer:
             )
             for r in reports
         )
+        persona_text = build_persona_material(self.personas, "reviewer")
         prompt = (
-            "【今晚会话清单与汇报摘要】\n"
+            (persona_text + "\n\n" if persona_text else "")
+            + "【今晚会话清单与汇报摘要】\n"
             + summaries
             + "\n这是主 agent 写好的草稿，请按审稿清单审查：\n\n"
             + draft_text

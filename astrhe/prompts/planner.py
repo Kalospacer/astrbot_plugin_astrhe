@@ -78,14 +78,18 @@ def build_planner_prompt(
     reconcile_text: str,
     last_run_note: str,
     appearance_text: str = "",
+    persona_text: str = "",
 ) -> str:
     """主 agent 的输入材料汇总。"""
     parts = []
     if last_run_note:
         parts.append(f"【上次运行】{last_run_note}")
+    if persona_text:
+        parts.append(persona_text)
     parts.append("【各会话汇报】")
     for r in reports:
-        parts.append(f"--- {r.get('umo', '')} ---\n{r.get('text', '')}")
+        note = f"（{r['persona']}）" if r.get("persona") else ""
+        parts.append(f"--- {r.get('umo', '')}{note} ---\n{r.get('text', '')}")
     if persons_text:
         parts.append(
             "【关系本（今天涉及的人 + 未来 14 天有纪念日的人）】\n" + persons_text

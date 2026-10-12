@@ -68,8 +68,7 @@ class ScheduleToolImpl:
 
         闹钟唤醒路径里发起人沿用 cron_payload.sender_id，权限看 event.role。
         """
-        extras = getattr(event, "_extras", None) or {}
-        cron_payload = extras.get("cron_payload") if isinstance(extras, dict) else None
+        cron_payload = event.get_extra("cron_payload")
         if isinstance(cron_payload, dict) and cron_payload.get("sender_id"):
             sender_id = str(cron_payload["sender_id"])
         else:
@@ -296,8 +295,7 @@ class ScheduleToolImpl:
         return "\n".join(lines) if lines else "现在没有可见的闹钟"
 
     def _is_cron_event(self, event: Any) -> bool:
-        extras = getattr(event, "_extras", None) or {}
-        return isinstance(extras, dict) and "cron_payload" in extras
+        return event.get_extra("cron_payload") is not None
 
     async def _hidden_from_caller(self, event: Any, alarm: dict, sender_id: str) -> bool:
         """与闹钟列表同一套保密判断：对当前调用者保密的闹钟当作不存在。"""

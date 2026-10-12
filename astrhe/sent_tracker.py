@@ -71,8 +71,7 @@ def sent_target(tool_result: Any) -> str:
 
 def _cron_job(event: Any) -> dict | None:
     """定时唤醒事件携带的任务信息；普通事件返回 None。"""
-    extras = getattr(event, "_extras", None)
-    job = extras.get("cron_job") if isinstance(extras, dict) else None
+    job = event.get_extra("cron_job")
     return job if isinstance(job, dict) else None
 
 

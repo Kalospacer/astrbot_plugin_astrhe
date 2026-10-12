@@ -37,10 +37,7 @@ class AlarmTracker:
         插件数据被删除重建后，旧平台任务里的闹钟编号会撞上新闹钟，
         所以还要核对平台任务编号，对不上就不认，免得把新闹钟误标执行、误停任务。
         """
-        extras = getattr(event, "_extras", None) or {}
-        if not isinstance(extras, dict):
-            return None
-        payload = extras.get("cron_payload")
+        payload = event.get_extra("cron_payload")
         if not isinstance(payload, dict) or not payload.get("astrhe_alarm_id"):
             return None
         alarm = await self.storage.alarms.get_by_alarm_id_str(
@@ -48,7 +45,7 @@ class AlarmTracker:
         )
         if alarm is None:
             return None
-        cron_job = extras.get("cron_job")
+        cron_job = event.get_extra("cron_job")
         job_id = str(cron_job.get("id") or "") if isinstance(cron_job, dict) else ""
         if job_id and job_id != alarm["cron_job_id"]:
             return None
@@ -60,8 +57,9 @@ class AlarmTracker:
         if alarm is None:
             return
         # 立即执行识别
-        extras = getattr(event, "_extras", {}) or {}
-        cron_job = extras.get("cron_job") or {}
+        cron_job = event.get_extra("cron_job")
+        if not isinstance(cron_job, dict):
+            cron_job = {}
         run_started_at = str(cron_job.get("run_started_at", "") or "")
         run_at = alarm["run_at"]
         manual = False

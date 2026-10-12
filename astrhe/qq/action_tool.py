@@ -88,8 +88,7 @@ class QQActionTool(_tool_base_class()):  # type: ignore[misc]
         except Exception:  # noqa: BLE001
             pass
         if action == "react" and not kwargs.get("message_id"):
-            extras = getattr(event, "_extras", {}) or {}
-            if "cron_payload" not in extras:
+            if event.get_extra("cron_payload") is None:
                 kwargs["message_id"] = str(
                     getattr(getattr(event, "message_obj", None), "message_id", "") or ""
                 )

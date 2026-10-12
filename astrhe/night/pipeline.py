@@ -15,9 +15,10 @@ from .. import constants as C
 from ..backfill import Backfiller
 from ..storage.retention import cleanup_before_night
 from ..timeutil import local_date_str, utc_now
-from .agent_runner import NightAgentError, get_persona_prompt, retry_stats
+from .agent_runner import NightAgentError, retry_stats
 from .draft import CommitError, DraftCommitter
 from .draft_preview import describe_dry_actions
+from .personas import resolve_session_personas, selected_persona
 from .planner import Planner
 from .reporter import Reporter
 from .reviewer import Reviewer
@@ -253,9 +254,17 @@ class NightPipeline:
         # ③ 汇报子代理
         self._set_stage("report")
         provider_id = await self.resolve_provider_id()
-        persona_prompt = await get_persona_prompt(
-            self.context, persona_id=str(self.config.get("persona_id", "") or "")
+        selected = await selected_persona(
+            self.context, str(self.config.get("persona_id", "") or "")
         )
+        persona_prompt = selected.prompt
+        umos = await self.storage.ledger.list_session_umos(window_start)
+        # 白天人格和夜间人格不同的会话：汇报换人格，规划与审稿拿到对照
+        personas = await resolve_session_personas(self.context, selected, umos)
+        if personas.differing:
+            stats["persona_sessions"] = {
+                umo: info.label for umo, info in personas.differing.items()
+            }
         reader_tools = self._internal_tools_provider(
             "reader", window=(window_start, window_end), run_id=run_id
         )
@@ -272,8 +281,8 @@ class NightPipeline:
             time_info=time_info,
             admins=self._admins(),
             self_id=self_id,
+            personas=personas,
         )
-        umos = await self.storage.ledger.list_session_umos(window_start)
         reports = await self._run_reporters(
             reporter, run_id, umos, window_start, window_end
         )
@@ -296,6 +305,7 @@ class NightPipeline:
             time_info=time_info,
             window=(window_start, window_end),
             self_id=self_id,
+            personas=personas,
         )
         reviewer = Reviewer(
             self.storage,
@@ -306,6 +316,7 @@ class NightPipeline:
             reader_tools,
             time_info=time_info,
             self_id=self_id,
+            personas=personas,
         )
         committer = DraftCommitter(
             self.storage,

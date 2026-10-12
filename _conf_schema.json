@@ -15,7 +15,7 @@
   "persona_id": {
     "type": "string",
     "description": "夜间分身使用的人格",
-    "hint": "选择 AstrBot 已有的人格；留空或所选人格不存在时使用 AstrBot 默认人格。汇报、规划、审稿共用。",
+    "hint": "选择 AstrBot 已有的人格；留空或所选人格不存在时使用 AstrBot 默认人格。规划、审稿共用；白天用了别的人格的会话，汇报由该会话的人格来写。",
     "_special": "select_persona",
     "default": ""
   },

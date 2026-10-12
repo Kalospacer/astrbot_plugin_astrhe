@@ -8,6 +8,7 @@ from typing import Any
 
 from .. import constants as C
 from ..prompts import planner as planner_prompts
+from ..prompts.persona import build_persona_material, daytime_phrase
 from ..timeutil import utc_now
 from ..tools.alarm_view import night_alarm_materials, platform_tasks
 from .agent_runner import run_night_agent
@@ -84,6 +85,7 @@ class Planner:
         time_info="",
         window=None,
         self_id="",
+        personas=None,
     ):
         self.storage = storage
         self.context = context
@@ -94,6 +96,7 @@ class Planner:
         self.time_text = time_info
         self.self_id = self_id
         self.window = window or (0, utc_now())
+        self.personas = personas
 
     def time_info(self, now_ts: float) -> str:
         return self.time_text
@@ -127,6 +130,10 @@ class Planner:
                 {k: v for k, v in report.items() if k != "summary"}, ensure_ascii=False
             )
             report_items.append({"umo": r["umo"], "text": f"{text}\n{detail}"})
+        if self.personas is not None:
+            for item in report_items:
+                if self.personas.differs(item["umo"]):
+                    item["persona"] = daytime_phrase(self.personas.for_umo(item["umo"]))
 
         # 关系本：今天涉及的人 + 未来 14 天有纪念日的人
         speakers = await self.storage.db.fetchall(
@@ -214,6 +221,7 @@ class Planner:
                 reconcile_text,
                 last_run_note,
                 appearance_text,
+                build_persona_material(self.personas, "planner"),
             )
         )
 

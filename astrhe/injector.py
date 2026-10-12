@@ -6,7 +6,7 @@
 2. 保密提醒（当前会话有保密对象「在场」时）
 3. 本会话的规划段落
 4. 本会话可见的待办（今天的、逾期的、已到 show_from 的未来待办）
-5. day_reminders 自我提醒
+5. day_reminders 自我提醒（只给白天人格和夜间人格相同的会话）
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .night.personas import selected_persona, session_persona
 from .platform import event_umo
 from .timeutil import local_date_str, utc_now
 from .tools.secrecy import filter_secret_text, is_secret_visible_here, secret_ids
@@ -32,12 +33,17 @@ class Injector:
         secrecy_resolver: Any,
         enabled_getter,
         logger: Any,
+        *,
+        context: Any = None,
+        persona_id_getter=None,
     ):
         self.storage = storage
         self._tz_getter = tz_getter
         self.secrecy = secrecy_resolver
         self._enabled_getter = enabled_getter
         self.logger = logger
+        self.context = context
+        self._persona_id_getter = persona_id_getter
 
     def _enabled(self) -> bool:
         try:
@@ -68,8 +74,12 @@ class Injector:
                 t for t in tools if getattr(t, "name", "") != "future_task"
             ]
 
-    async def build_injection(self, umo: str, viewer_id: str) -> str:
-        """组装注入文本；没有内容时返回空串。单独抽出来方便测试。"""
+    async def build_injection(self, umo: str, viewer_id: str, same_persona=None) -> str:
+        """组装注入文本；没有内容时返回空串。单独抽出来方便测试。
+
+        same_persona：可选的 async 判断，返回 False 表示这里白天用的人格和
+        夜间人格不同，不注入 day_reminders；只在确有提醒时才调用。
+        """
         tz = self._tz_getter()
         today = local_date_str(utc_now(), tz)
         present = await self.secrecy.present_ids(umo)
@@ -125,9 +135,12 @@ class Injector:
             todo_lines.append(f"#{t['id']}{mark} {t['content']}")
         todos_text = "\n".join(todo_lines)
 
-        # 5. 自我反思
+        # 5. 自我反思：用夜间人格口吻写的，别的人格的会话不注入
+        reminders = latest_plan["day_reminders"] if latest_plan else ""
+        if reminders and same_persona is not None and not await same_persona():
+            reminders = ""
         reflection = filter_secret_text(
-            latest_plan["day_reminders"] if latest_plan else "",
+            reminders,
             viewer_id=viewer_id,
             session_umo=umo,
             present_ids=present,
@@ -157,9 +170,30 @@ class Injector:
             viewer_id = str(event.get_sender_id())
         except Exception:  # noqa: BLE001
             return
-        text = await self.build_injection(umo, viewer_id)
+        text = await self.build_injection(
+            umo, viewer_id, same_persona=lambda: self._same_persona(event, req)
+        )
         if not text:
             return
         part = TextPart(text=text)
         part.mark_as_temp()
         req.extra_user_content_parts.append(part)
+
+    async def _same_persona(self, event: Any, req: Any) -> bool:
+        """当前会话白天用的人格是否就是夜间人格；查不到按相同处理（照旧注入）。"""
+        if self.context is None or self._persona_id_getter is None:
+            return True
+        try:
+            selected = await selected_persona(
+                self.context, str(self._persona_id_getter() or ""), warn=False
+            )
+            current = await session_persona(
+                self.context,
+                event.unified_msg_origin,
+                conversation=getattr(req, "conversation", None),
+                platform_name=event.get_platform_name(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.logger.debug(f"[AstrHe] 判断会话人格失败: {exc}")
+            return True
+        return current is None or current.same_as(selected)

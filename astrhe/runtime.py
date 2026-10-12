@@ -71,7 +71,13 @@ class AstrHeRuntime:
             self.storage, context, self.tz, self._default_window, self.secrecy
         )
         self.injector = Injector(
-            self.storage, self.tz, self.secrecy, self.enabled, logger
+            self.storage,
+            self.tz,
+            self.secrecy,
+            self.enabled,
+            logger,
+            context=context,
+            persona_id_getter=lambda: self.config.get("persona_id", ""),
         )
         self.alarm_tracker = AlarmTracker(self.storage, context, self.tz, logger)
         self.sent_tracker = SentTracker(

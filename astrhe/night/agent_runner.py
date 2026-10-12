@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-import inspect
 from typing import Any
 
 from astrbot.api import logger
 
 from .. import constants as C
+from .personas import selected_persona
 from .silent_event import make_silent_event
 
 try:
@@ -123,22 +123,5 @@ async def run_night_agent(
 
 
 async def get_persona_prompt(context: Any, umo: str = "", persona_id: str = "") -> str:
-    """读取选定人格；为空或不存在时回退 AstrBot 默认人格。"""
-    manager = context.persona_manager
-    persona = None
-    if persona_id:
-        try:
-            persona = manager.get_persona_v3_by_id(persona_id)
-            if inspect.isawaitable(persona):
-                persona = await persona
-        except Exception as exc:
-            logger.warning(f"[AstrHe] 读取选定人格失败：{exc}")
-    if persona is None:
-        logger.warning("[AstrHe] 未选择人格或人格不存在，使用 AstrBot 默认人格")
-        persona = await manager.get_default_persona_v3(umo or None)
-    prompt = (
-        persona.get("prompt", "")
-        if isinstance(persona, dict)
-        else getattr(persona, "prompt", "")
-    )
-    return str(prompt or "")
+    """读取选定人格的提示词；为空或不存在时回退 AstrBot 默认人格。"""
+    return (await selected_persona(context, persona_id, umo)).prompt

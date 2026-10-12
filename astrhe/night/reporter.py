@@ -15,6 +15,7 @@ from typing import Any
 
 from .. import constants as C
 from ..prompts import reporter as reporter_prompts
+from ..prompts.persona import persona_prompt_text, reporter_persona_note
 from ..tools.reader_tools import format_message_line
 from ..timeutil import local_datetime_str
 from ..platform import parse_umo
@@ -85,6 +86,7 @@ class Reporter:
         time_info="",
         admins=None,
         self_id="",
+        personas=None,
     ):
         self.storage = storage
         self.context = context
@@ -95,6 +97,8 @@ class Reporter:
         self.time_info = time_info
         self.admins = admins or []
         self.self_id = self_id
+        # 会话人格对照（SessionPersonas）；人格不同的会话由该会话的人格来汇报
+        self.personas = personas
         self._semaphore = asyncio.Semaphore(C.REPORT_CONCURRENCY)
 
     async def report_session(
@@ -127,13 +131,15 @@ class Reporter:
         self_id = self.self_id or next(
             (r["sender_id"] for r in rows if r["is_bot"]), ""
         )
+        persona_prompt, persona_note = self.persona_for(umo)
         system = reporter_prompts.build_reporter_system(
-            self.persona_prompt,
+            persona_prompt,
             persons_brief,
             time_info=self.time_info,
             session=f"{'群聊' if kind == 'GroupMessage' else '私聊'} {sid}（{umo}）",
             self_id=self_id,
             admins=self.admins,
+            persona_note=persona_note,
         )
 
         async with self._semaphore:
@@ -163,6 +169,13 @@ class Reporter:
             "parse_ok": report is not None,
             "raw": raw,
         }
+
+    def persona_for(self, umo: str) -> tuple[str, str]:
+        """(人格正文, 人格说明)；和夜间人格相同的会话照旧，说明为空。"""
+        if self.personas is None or not self.personas.differs(umo):
+            return self.persona_prompt, ""
+        info = self.personas.for_umo(umo)
+        return persona_prompt_text(info), reporter_persona_note(info)
 
     async def _report_chunk(
         self, umo: str, lines: list[str], system: str, index: int, total: int
