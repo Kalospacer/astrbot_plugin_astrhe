@@ -59,6 +59,14 @@ def event_umo(event: Any) -> str:
     return build_umo(pid, kind, sid) if pid and kind and sid else ""
 
 
+def is_admin_private(event: Any) -> bool:
+    """管理员私聊（包含自主心跳事件）使用白天的全局视角。"""
+    return (
+        getattr(event, "role", "member") == "admin"
+        and parse_umo(event_umo(event))[1] == "FriendMessage"
+    )
+
+
 def resolve_session_ref(ref: str, platform_id: str) -> str:
     """接受会话简写或完整 UMO，返回规范 UMO；错误当场反馈给模型。"""
     text = str(ref or "").strip()

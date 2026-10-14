@@ -14,6 +14,7 @@ from .. import constants as C
 from ..platform import resolve_session_ref
 from ..timeutil import utc_now
 from .base import AstrHeFunctionTool
+from .todo_fields import json_list, normalize_todo_fields
 from .validation import (
     validate_alarm,
     validate_alarm_cancel,
@@ -132,17 +133,7 @@ class DraftTools:
 
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _json_list(value: Any) -> list:
-        if isinstance(value, list):
-            return value
-        if not value:
-            return []
-        try:
-            parsed = json.loads(str(value))
-            return parsed if isinstance(parsed, list) else [parsed]
-        except (ValueError, TypeError):
-            return [str(value)]
+    _json_list = staticmethod(json_list)
 
     async def _draft_plan(
         self, event: Any, full_text: str = "", reflection: str = "", **kw
@@ -178,29 +169,20 @@ class DraftTools:
     async def _draft_todo(
         self, event: Any, content: str = "", visible_umos: Any = None, **kw
     ) -> str:
-        if not content.strip():
-            return "待办内容不能为空"
-        umos = self._json_list(visible_umos)
-        if not umos:
-            return "visible_umos 不能为空：待办要知道贴给哪些会话看"
-        payload = {
-            "content": content,
-            "visible_umos": [self._resolve(u) for u in umos],
-            "secret_from": normalize_qq_ids(self._json_list(kw.get("secret_from"))),
-            "due_kind": str(kw.get("due_kind", "today") or "today"),
-            "due_date": str(kw.get("due_date", "") or ""),
-            "show_from": str(kw.get("show_from", "") or ""),
-            "evidence": self._json_list(kw.get("evidence")),
-        }
         run = await self.storage.runs.get_run(self.run_id)
-        if payload["due_kind"] not in ("today", "future", "deadline"):
-            return "due_kind 只能为 today / future / deadline"
-        payload["due_date"] = payload["due_date"] or run["plan_date"]
-        payload["show_from"] = payload["show_from"] or (
-            run["plan_date"]
-            if payload["due_kind"] == "deadline"
-            else payload["due_date"]
+        payload = normalize_todo_fields(
+            {
+                "content": content,
+                "visible_umos": visible_umos,
+                "secret_from": kw.get("secret_from"),
+                "due_kind": kw.get("due_kind", "today"),
+                "due_date": kw.get("due_date", ""),
+                "show_from": kw.get("show_from", ""),
+            },
+            resolve=self._resolve,
+            default_date=run["plan_date"],
         )
+        payload["evidence"] = self._json_list(kw.get("evidence"))
         return await self._add("todo", payload, kw.get("replace_draft_id", 0))
 
     async def _draft_todo_drop(

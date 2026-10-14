@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from .. import constants as C
-from ..platform import parse_umo, event_umo
+from ..platform import parse_umo, event_umo, is_admin_private
 from .base import AstrHeFunctionTool
 from .alarm_view import read_alarms
 from .secrecy import filter_secret_text
@@ -339,14 +339,9 @@ class ReaderTools:
             umo = event_umo(event)
         except Exception:  # noqa: BLE001
             pass
-        _, message_type, _ = parse_umo(umo)
         # 全文里有各个会话的事和私聊细节，白天只在管理员私聊里给全文，
         # 其他会话只给本会话的段落，免得被群友一问就整本复述出来
-        admin_private = (
-            getattr(event, "role", "member") == "admin"
-            and message_type == "FriendMessage"
-        )
-        if admin_private:
+        if is_admin_private(event):
             title = f"规划书（{plan['plan_date']}）"
             text = plan["full_text"]
         else:

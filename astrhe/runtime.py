@@ -57,7 +57,7 @@ class AstrHeRuntime:
         self.recorder = Recorder(self.storage, logger, self.enabled)
         self.backfiller = Backfiller(self.storage, self.platform, logger)
         self.friend_requests = FriendRequestManager(self.storage, self.qq, logger)
-        self.day_tools = DayTools(self.storage, self.tz, self.secrecy)
+        self.day_tools = DayTools(self.storage, self.tz, self.secrecy, self.platform)
         self.schedule_impl = ScheduleToolImpl(
             self.storage,
             context,
@@ -165,7 +165,6 @@ class AstrHeRuntime:
         from .qq.action_tool import QQActionTool
         from .qq.lookup_tool import QQLookupTool
 
-        todo_meta = DayTools.todo_update_tool()
         schedule_params = {
             "type": "object",
             "properties": {
@@ -225,16 +224,12 @@ class AstrHeRuntime:
         }
         try:
             add_llm_tools(
-                AstrHeFunctionTool(
-                    name=todo_meta["name"],
-                    description=todo_meta["description"],
-                    parameters=todo_meta["parameters"],
-                    fn=self.day_tools.todo_update,
-                ),
+                *self.day_tools.build(),
                 AstrHeFunctionTool(
                     name="astrhe_read_plan",
                     description=(
-                        "读规划书全文。参数：date（可选，YYYY-MM-DD，默认最近一份）。"
+                        "读规划书。管理员私聊能读全文，其他会话只读自己的段落。"
+                        "参数：date（可选，YYYY-MM-DD，默认最近一份）。"
                         "list=true 列日期，每页 60 份，offset 翻页。对别人保密的内容会被遮挡。"
                     ),
                     parameters=PLAN_READ_PARAMETERS,

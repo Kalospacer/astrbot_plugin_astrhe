@@ -15,8 +15,8 @@ import json
 from typing import Any
 
 from .night.personas import selected_persona, session_persona
-from .platform import event_umo
-from .timeutil import local_date_str, utc_now
+from .platform import event_umo, is_admin_private
+from .tools.day_scope import session_labels, todos_for_view
 from .tools.secrecy import filter_secret_text, is_secret_visible_here, secret_ids
 
 try:
@@ -74,14 +74,16 @@ class Injector:
                 t for t in tools if getattr(t, "name", "") != "future_task"
             ]
 
-    async def build_injection(self, umo: str, viewer_id: str, same_persona=None) -> str:
+    async def build_injection(
+        self, umo: str, viewer_id: str, same_persona=None, full_view: bool = False
+    ) -> str:
         """组装注入文本；没有内容时返回空串。单独抽出来方便测试。
 
         same_persona：可选的 async 判断，返回 False 表示这里白天用的人格和
         夜间人格不同，不注入 day_reminders；只在确有提醒时才调用。
+        full_view：管理员私聊可见全部未完成待办，其他注入部分仍按当前会话。
         """
         tz = self._tz_getter()
-        today = local_date_str(utc_now(), tz)
         present = await self.secrecy.present_ids(umo)
 
         # 1. 陈旧提示：上次运行失败，且昨晚没提交新计划
@@ -121,18 +123,24 @@ class Injector:
         )
 
         # 4. 待办
-        todos = await self.storage.plans.visible_todos(umo, today)
+        todos = await todos_for_view(
+            self.storage,
+            umo=umo,
+            viewer_id=viewer_id,
+            present_ids=present,
+            tz=tz,
+            full_view=full_view,
+        )
         todo_lines = []
         for t in todos:
-            if not is_secret_visible_here(
-                json.loads(t["secret_from_json"] or "[]"),
-                viewer_id=viewer_id,
-                session_umo=umo,
-                present_ids=present,
-            ):
-                continue
             mark = "（未来）" if t["due_kind"] == "future" else ""
-            todo_lines.append(f"#{t['id']}{mark} {t['content']}")
+            origin = ""
+            if full_view:
+                labels = await session_labels(
+                    self.storage, json.loads(t["visible_umos_json"] or "[]")
+                )
+                origin = f"[{labels}] "
+            todo_lines.append(f"#{t['id']}{mark} {origin}{t['content']}")
         todos_text = "\n".join(todo_lines)
 
         # 5. 自我反思：用夜间人格口吻写的，别的人格的会话不注入
@@ -171,7 +179,10 @@ class Injector:
         except Exception:  # noqa: BLE001
             return
         text = await self.build_injection(
-            umo, viewer_id, same_persona=lambda: self._same_persona(event, req)
+            umo,
+            viewer_id,
+            same_persona=lambda: self._same_persona(event, req),
+            full_view=is_admin_private(event),
         )
         if not text:
             return
