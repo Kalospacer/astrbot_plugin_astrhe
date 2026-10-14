@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS messages (
     ts REAL NOT NULL,
     is_bot INTEGER NOT NULL DEFAULT 0,
     recalled INTEGER NOT NULL DEFAULT 0,
-    source TEXT NOT NULL DEFAULT 'live'
+    source TEXT NOT NULL DEFAULT 'live',
+    media TEXT NOT NULL DEFAULT ''
 );
 -- 部分唯一索引：仅在 platform_message_id 非空时按 (umo, platform_message_id) 去重
 CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_umo_pmid
@@ -242,6 +243,7 @@ class Database:
             await self.ensure_column(
                 table, "deleted_reason", "TEXT NOT NULL DEFAULT ''"
             )
+        await self.ensure_column("messages", "media", "TEXT NOT NULL DEFAULT ''")
         await self.ensure_column("plans", "updated_at", "REAL")
         await self.ensure_column("alarms", "finished_at", "REAL")
         await self.ensure_column("promises", "created_at", "REAL NOT NULL DEFAULT 0")

@@ -10,6 +10,7 @@ from . import constants as C
 from .alarm_tracker import AlarmTracker
 from .backfill import Backfiller
 from .injector import Injector
+from .media_caption import apply_caption_writeback
 from .night.pipeline import NightPipeline
 from .platform import PlatformHelper
 from .qq.client import QQClient
@@ -280,6 +281,19 @@ class AstrHeRuntime:
                     self.logger.info("[AstrHe] 已自动同意预期联系人的好友申请")
         except Exception:  # noqa: BLE001
             pass
+
+    async def handle_llm_request(self, event: Any, req: Any) -> None:
+        """把核心管线刚生成的图片描述回写进账本（best-effort，失败不影响主流程）。
+
+        这个钩子的优先级高于 AstrIRMIA，会在它清理 `extra_user_content_parts`
+        之前拿到完整的 `<image_caption>` 与随消息附图的路径。
+        """
+        if not self.enabled():
+            return
+        try:
+            await apply_caption_writeback(self.storage, event, req, self.logger)
+        except Exception as exc:  # noqa: BLE001 - 回写失败不能影响正常聊天
+            self.logger.debug(f"[AstrHe] 图片描述回写跳过: {exc}")
 
     # ---------------- 夜间运行 ----------------
 

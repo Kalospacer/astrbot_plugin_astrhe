@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .media_caption import build_media_json
 from .platform import build_umo, normalize_session_id
 from .timeutil import utc_now
 from .storage import Storage
@@ -181,6 +182,7 @@ class Recorder:
             platform_message_id=platform_message_id,
             is_bot=False,
             source="live",
+            media=build_media_json(obj.message),
         )
 
     async def _record_notice(self, event: Any, raw: dict) -> None:
