@@ -3,4 +3,8 @@ Copyright © 2020-2025 Beijing Xiaomi Mobile Software Co.,Ltd. All Rights Reserv
 
 Official source: https://hyperos.mi.com/font/download
 Archive: https://hyperos.mi.com/font-download/MiSans.zip
-Files are embedded in this application unmodified. License: MiSans-license.pdf
+MiSansVF.ttf (Version 4.009) is embedded in this application unmodified.
+The build stores the complete file with lossless Brotli compression; the browser
+restores the original bytes before use. No glyphs or font tables are removed.
+Source SHA-256: 0ddef90648998900175cfdca9a6f087a2544c182f130b0ad4f7e94a03a115e79
+License: MiSans-license.pdf

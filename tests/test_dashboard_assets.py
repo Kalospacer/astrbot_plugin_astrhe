@@ -94,18 +94,48 @@ def _glb_json(path: Path) -> dict:
     import json
     import struct
 
-    data = path.read_bytes()
+    data = _unpack(path)
     length = struct.unpack("<I", data[12:16])[0]
     return json.loads(data[20 : 20 + length])
 
 
+def _unpack(path: Path) -> bytes:
+    import shutil
+    import subprocess
+
+    if shutil.which("node") is None:
+        pytest.skip("需要 Node.js 验证前端资源的无损解压")
+    return subprocess.check_output(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            "import{readFileSync}from'node:fs';"
+            "import{brotliDecompressSync}from'node:zlib';"
+            "process.stdout.write(brotliDecompressSync(readFileSync(process.argv[1])))",
+            str(path),
+        ]
+    )
+
+
 def test_models_are_meshopt_compressed_and_decoder_is_bundled():
-    models = sorted(ASSETS.glob("archive-*.glb"))
+    import hashlib
+
+    models = sorted(ASSETS.glob("archive-*.glb.br"))
     assert [p.name.split(".")[0] for p in models] == [
         "archive-assembly",
         "archive-cassette",
     ]
+    # 还原后与此前已验证过的 meshopt GLB 完全相同，烘焙顶点和查看器输入均不变。
+    expected = {
+        "archive-assembly": "b49bb886d76cd207e62fd8d85847e4c63a040af8415b0a6771c65de70898fd8a",
+        "archive-cassette": "d5e6ee6bcab61999c62b79064811214b9c0a84f653f6cb00c20e41bcda8a11ef",
+    }
     for path in models:
+        assert (
+            hashlib.sha256(_unpack(path)).hexdigest()
+            == expected[path.name.split(".")[0]]
+        )
         gltf = _glb_json(path)
         assert "EXT_meshopt_compression" in gltf.get("extensionsRequired", []), path
         # 无损压缩：不量化，所以不需要 KHR_mesh_quantization
@@ -117,10 +147,68 @@ def test_models_are_meshopt_compressed_and_decoder_is_bundled():
         "mdui@",
         "lit-html@",
         "material-color-utilities@",
+        "brotli-dec-wasm@2.3.2",
     ):
         assert name in licenses, name
     loaders = [name for name, code in _chunks().items() if ".glb" in code]
     assert loaders and all("setMeshoptDecoder" in _chunks()[n] for n in loaders)
+
+
+def test_complete_variable_font_roundtrips_without_removing_characters():
+    import hashlib
+
+    fonts = list((DASHBOARD / "fonts").glob("MiSansVF.*.ttf.br"))
+    assert len(fonts) == 1
+    assert not list((DASHBOARD / "fonts").glob("*.woff2"))
+    restored = _unpack(fonts[0])
+    source = DASHBOARD.parents[1] / "frontend" / "fonts" / "MiSansVF.ttf"
+    assert restored == source.read_bytes()
+    assert hashlib.sha256(restored).hexdigest() == (
+        "0ddef90648998900175cfdca9a6f087a2544c182f130b0ad4f7e94a03a115e79"
+    )
+    assert len(list(ASSETS.glob("*.wasm"))) == 1
+    assert (DASHBOARD / "fonts" / "MiSans-license.pdf").is_file()
+
+
+def test_worktree_install_zip_is_below_sixteen_decimal_megabytes(tmp_path):
+    import shutil
+    import subprocess
+
+    root = DASHBOARD.parents[1]
+    if shutil.which("git") is None or not (root / ".git").exists():
+        pytest.skip("需要 git 按实际发布规则生成 ZIP")
+    # 临时索引只收录本次安装包的运行文件，不改变用户暂存区，也不提交。
+    env = {**os.environ, "GIT_INDEX_FILE": str(tmp_path / "index")}
+    subprocess.run(["git", "read-tree", "HEAD"], cwd=root, env=env, check=True)
+    subprocess.run(
+        [
+            "git",
+            "add",
+            "--all",
+            "--",
+            ".gitattributes",
+            "pages/dashboard",
+            "README.md",
+            "CHANGELOG.md",
+            "frontend/LICENSE-RhineLabUI",
+            "frontend/THIRD_PARTY_NOTICES.md",
+        ],
+        cwd=root,
+        env=env,
+        check=True,
+    )
+    tree = subprocess.check_output(
+        ["git", "write-tree"],
+        cwd=root,
+        env=env,
+        text=True,
+    ).strip()
+    archive = subprocess.check_output(
+        ["git", "archive", "--format=zip", "--prefix=AstrHe/", tree],
+        cwd=root,
+    )
+    # 按更严格的十进制 16 MB 留足余量，同样适用于 16 MiB 限制。
+    assert len(archive) < 16_000_000, f"安装包 {len(archive):,} 字节，超过 16 MB"
 
 
 def test_install_archive_skips_dev_sources_but_keeps_notices():

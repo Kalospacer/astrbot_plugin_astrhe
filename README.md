@@ -50,7 +50,7 @@
 
 在 AstrBot 面板的插件页面打开「AstrHe 档案终端」查看 AstrHe 的数据。提供两套前端，功能完全对齐：
 
-- **SOUL OS**：三维档案阵列。界面改编自 [RhineLabUI](https://github.com/LBEILC/RhineLabUI)（MIT），去掉了音乐与音效，文字、标志和档案盒模型换成了 AstrHe 的。画面在**打开页面的浏览器**里渲染，需要启用硬件加速；每次打开约下载 24 MB（中文字体约 19 MB、模型约 4 MB），开场动画播放时同步下载，下载较慢时开场会停在等待点并显示进度。对显卡有一定要求，低端设备可在设置里开启 SUPER PERFORMANCE 降低画质，或减少、关闭开场动画。
+- **SOUL OS**：三维档案阵列。界面改编自 [RhineLabUI](https://github.com/LBEILC/RhineLabUI)（MIT），去掉了音乐与音效，文字、标志和档案盒模型换成了 AstrHe 的。画面在**打开页面的浏览器**里渲染，需要启用硬件加速；每次打开约下载 16 MB（完整中文可变字体约 12.8 MB、模型约 1.7 MB，其余为页面与解压器），浏览器本地无损解压，保留完整字符和四档字重，不依赖外部字体 CDN。开场动画播放时同步下载模型，下载较慢时开场会停在等待点并显示进度。对显卡有一定要求，低端设备可在设置里开启 SUPER PERFORMANCE 降低画质，或减少、关闭开场动画。
 - **NORMAL**：Material Design 3 普通版，基于 [mdui](https://www.mdui.org/)（MIT）。使用系统字体，不下载三维模型和字体，没有重特效，配置较低的电脑和手机也流畅。配色为 MD3 动态配色，亮暗跟随 AstrBot 面板；窗口宽时左列表右详情并排，窄时变成底部导航加全屏详情。
 
 用哪一套由设置里的 `frontend_landscape` / `frontend_portrait` 决定：**只按打开页面那一刻 iframe 的横竖屏选择**（宽高相等算竖屏），选定后转屏或拖动窗口都不会切换（NORMAL 自己的布局仍会随窗口尺寸自适应）。读不到设置时（插件未启用、接口报错或超时）用默认值：横屏 SOUL OS，竖屏 NORMAL。
@@ -61,7 +61,7 @@
 - 可以检索档案、导出文本、编辑关系本的关系层（称呼、别名、纪念日）、删除待办或承诺（放入回收站）、取消闹钟。
 - 对管理员保密的内容默认打码，点「解密」才显示，只在本次打开期间有效；检索不会命中保密内容。
 - AstrBot 插件页面不允许浏览器缓存和存储，所以每次打开都会重新下载页面资源，界面设置也只在本次打开期间有效。AstrBot 所在的机器只提供文件和数据，部署在树莓派等小主机上也没问题；远程访问时速度取决于 AstrBot 主机的上传带宽。
-- 前端源码在 `frontend/`（TypeScript + Vite；SOUL OS 用 Three.js，NORMAL 用 mdui），`npm ci && npm run build` 输出到 `pages/dashboard/`（打包时用 meshopt 无损压缩三维模型）；插件安装包（GitHub 生成的源码压缩包）不含 `frontend/` 下的源码、字体与模型源文件和 `tests/`，修改前端请克隆仓库；第三方作品与字体许可见 [`frontend/THIRD_PARTY_NOTICES.md`](frontend/THIRD_PARTY_NOTICES.md)。
+- 前端源码在 `frontend/`（TypeScript + Vite；SOUL OS 用 Three.js，NORMAL 用 mdui），`npm ci && npm run build` 输出到 `pages/dashboard/`（模型先用 meshopt 无损压缩，再与完整字体一起做整文件 Brotli 无损压缩）；插件安装包约 15.4 MB（十进制，低于 16 MB），不含 `frontend/` 下的源码、字体与模型源文件和 `tests/`，仓库完整保留源码及原始资源，修改前端请克隆仓库。发布 ZIP 通过 `.gitattributes` 排除开发文件，前端产物与全部许可仍随包分发；第三方作品与字体许可见 [`frontend/THIRD_PARTY_NOTICES.md`](frontend/THIRD_PARTY_NOTICES.md)。
 
 ## 隐私说明
 
@@ -104,7 +104,7 @@
 
 ## 版本
 
-当前版本 **0.3.0**，详见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本 **0.3.1**，详见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 许可证
 
