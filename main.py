@@ -54,6 +54,7 @@ class AstrHe(Star):
     async def inject_plan(self, event: AstrMessageEvent, req) -> None:
         """注入该会话的待办与规划段落，并隐藏自带 future_task。"""
         await self.runtime.injector.on_llm_request(event, req)
+        await self.runtime.handle_llm_request(event, req)
 
     @filter.on_agent_begin()
     async def track_agent_begin(self, event: AstrMessageEvent, run_context) -> None:

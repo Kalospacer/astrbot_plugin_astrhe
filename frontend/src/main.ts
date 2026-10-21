@@ -11,7 +11,7 @@ import {
 } from "./render-quality";
 import { qualityMarkup, syncQualityUI } from "./quality-settings";
 import { viewportLayout, openingLayout } from "./viewport-layout";
-import { assetUrl, downloadProgress, FONT_PATH, loadFonts, MODEL_PATHS, preloadAsset } from "./asset-url";
+import { assetUrl, downloadProgress, FONT_PATHS, loadFont, MODEL_PATHS, preloadAsset } from "./asset-url";
 import {
   createRollingNumber,
   createRollingText,
@@ -1200,8 +1200,9 @@ function bindScene(scene: ArchiveScene, cell?: { lane: number; row: number }) {
 }
 // 开场「START PROCESSING...」三个点出全的那一帧（原片第 476 帧）：资源未到齐时在这里等。
 const BOOT_HOLD = 476 / 25 - 5;
-// 四档字重共用完整可变字体；模型在开场期间后台下载，等待点显示模型进度。
-const BACKGROUND_ASSETS = MODEL_PATHS;
+// 加载页只等开场要用的三档字重；细体与模型在开场期间后台下载（等待点显示它们的进度）。
+const OPENING_WEIGHTS = [400, 600, 700] as const;
+const BACKGROUND_ASSETS = [...MODEL_PATHS, FONT_PATHS[300]];
 let skipRequested = false;
 let syncVisible = false;
 
@@ -1383,14 +1384,15 @@ document.addEventListener("submit", (e) => {
 
 async function start() {
   // 插件页面的资源令牌 60 秒过期，且每次打开都要重新下载：所有资源在第一时间一起发起请求。
-  // 开场只等字体；模型（低优先级）在开场播放期间下载。
+  // 开场只等它要用的三档字重；模型和细体字（低优先级）在开场播放期间下载。
   const models = MODEL_PATHS.map((path) => preloadAsset(path, "low"));
   models.forEach((model) =>
     model.catch(() => {
       /* 由 scene.load / 查看器负责报错或重试 */
     }),
   );
-  const fonts = loadFonts();
+  const openingFonts = Promise.all(OPENING_WEIGHTS.map((weight) => loadFont(weight)));
+  const lightFont = loadFont(300, "low");
   // 开场被关闭或在调试回放时，照原版先等资源全部到齐。
   const streaming =
     motionActive("boot") &&
@@ -1402,8 +1404,8 @@ async function start() {
   });
   trackLoading(
     streaming
-      ? [FONT_PATH]
-      : [FONT_PATH, ...MODEL_PATHS],
+      ? OPENING_WEIGHTS.map((weight) => FONT_PATHS[weight])
+      : [...Object.values(FONT_PATHS), ...MODEL_PATHS],
   );
   try {
     try {
@@ -1415,9 +1417,9 @@ async function start() {
     }
     scene = new ArchiveScene($("#three-scene"));
     scene.setTheme(prefs.colorTheme === "dark", true);
-    const resources = Promise.all([scene.load(), fonts]);
+    const resources = Promise.all([scene.load(), openingFonts, lightFont]);
     if (streaming) {
-      await fonts;
+      await openingFonts;
       completeStartup();
     }
     await resources;

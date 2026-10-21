@@ -7,9 +7,11 @@ import time
 from typing import Any
 
 from . import constants as C
+from .access import SessionAccess
 from .alarm_tracker import AlarmTracker
 from .backfill import Backfiller
 from .injector import Injector
+from .media_caption import apply_caption_writeback
 from .night.pipeline import NightPipeline
 from .platform import PlatformHelper
 from .qq.client import QQClient
@@ -50,13 +52,21 @@ class AstrHeRuntime:
         )
         self.storage = Storage(data_dir)
         self.platform = PlatformHelper(context, logger)
+        # 会话名单：所有记录、补拉、复盘、定闹钟的入口共用
+        self.access = SessionAccess(
+            context,
+            self.config,
+            self.admins,
+            logger,
+            platform_id_getter=self.platform.default_platform_id,
+        )
         self.qq = QQClient(self.platform)
         self.rate_limiter = RateLimiter(self.storage, self.tz)
         self.secrecy = PresentResolver(self.storage, self.qq)
-        self.recorder = Recorder(self.storage, logger, self.enabled)
-        self.backfiller = Backfiller(self.storage, self.platform, logger)
+        self.recorder = Recorder(self.storage, logger, self.enabled, self.access)
+        self.backfiller = Backfiller(self.storage, self.platform, logger, self.access)
         self.friend_requests = FriendRequestManager(self.storage, self.qq, logger)
-        self.day_tools = DayTools(self.storage, self.tz, self.secrecy)
+        self.day_tools = DayTools(self.storage, self.tz, self.secrecy, self.platform)
         self.schedule_impl = ScheduleToolImpl(
             self.storage,
             context,
@@ -66,9 +76,15 @@ class AstrHeRuntime:
             self.secrecy,
             self.admins,
             self.friend_requests,
+            access=self.access,
         )
         self.reader_tools = ReaderTools(
-            self.storage, context, self.tz, self._default_window, self.secrecy
+            self.storage,
+            context,
+            self.tz,
+            self._default_window,
+            self.secrecy,
+            access=self.access,
         )
         self.injector = Injector(
             self.storage,
@@ -78,10 +94,17 @@ class AstrHeRuntime:
             logger,
             context=context,
             persona_id_getter=lambda: self.config.get("persona_id", ""),
+            access=self.access,
         )
         self.alarm_tracker = AlarmTracker(self.storage, context, self.tz, logger)
         self.sent_tracker = SentTracker(
-            self.storage, context, self.platform, self.tz, logger, self.enabled
+            self.storage,
+            context,
+            self.platform,
+            self.tz,
+            logger,
+            self.enabled,
+            access=self.access,
         )
         self.scheduler = NightScheduler(self.storage, self.tz, self.run_night, logger)
         self.webapi = WebApi(
@@ -141,7 +164,23 @@ class AstrHeRuntime:
         self._register_tools()
         self.webapi.register()
         self.scheduler.start()
+        await self.cancel_unlisted_alarms()
         self.logger.info("[AstrHe] 已启用：零点调度、记录器、白天注入与工具已就绪")
+
+    async def cancel_unlisted_alarms(self) -> None:
+        """启动时（包括改设置后的重载）就取消名单外的闹钟，不必等到零点对账。
+
+        AstrBot 启动时插件先于定时任务调度加载，这里删掉的任务不会再被排上。
+        """
+        try:
+            text = await self.alarm_tracker.cancel_unlisted(
+                self.access, admins=self.admins()
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning(f"[AstrHe] 清理会话名单外的闹钟失败: {exc}")
+            return
+        if text:
+            self.logger.info(f"[AstrHe] {text}")
 
     async def terminate(self) -> None:
         await self.scheduler.stop()
@@ -164,7 +203,6 @@ class AstrHeRuntime:
         from .qq.action_tool import QQActionTool
         from .qq.lookup_tool import QQLookupTool
 
-        todo_meta = DayTools.todo_update_tool()
         schedule_params = {
             "type": "object",
             "properties": {
@@ -224,16 +262,12 @@ class AstrHeRuntime:
         }
         try:
             add_llm_tools(
-                AstrHeFunctionTool(
-                    name=todo_meta["name"],
-                    description=todo_meta["description"],
-                    parameters=todo_meta["parameters"],
-                    fn=self.day_tools.todo_update,
-                ),
+                *self.day_tools.build(),
                 AstrHeFunctionTool(
                     name="astrhe_read_plan",
                     description=(
-                        "读规划书全文。参数：date（可选，YYYY-MM-DD，默认最近一份）。"
+                        "读规划书。管理员私聊能读全文，其他会话只读自己的段落。"
+                        "参数：date（可选，YYYY-MM-DD，默认最近一份）。"
                         "list=true 列日期，每页 60 份，offset 翻页。对别人保密的内容会被遮挡。"
                     ),
                     parameters=PLAN_READ_PARAMETERS,
@@ -249,8 +283,12 @@ class AstrHeRuntime:
                     parameters=schedule_params,
                     fn=self.schedule_impl.run,
                 ),
-                QQLookupTool(qq_client=self.qq),
-                QQActionTool(qq_client=self.qq, rate_limiter=self.rate_limiter),
+                QQLookupTool(qq_client=self.qq, access=self.access),
+                QQActionTool(
+                    qq_client=self.qq,
+                    rate_limiter=self.rate_limiter,
+                    access=self.access,
+                ),
             )
             self._tools_registered = True
         except Exception as exc:  # noqa: BLE001
@@ -281,6 +319,19 @@ class AstrHeRuntime:
         except Exception:  # noqa: BLE001
             pass
 
+    async def handle_llm_request(self, event: Any, req: Any) -> None:
+        """把核心管线刚生成的图片描述回写进账本（best-effort，失败不影响主流程）。
+
+        这个钩子的优先级高于 AstrIRMIA，会在它清理 `extra_user_content_parts`
+        之前拿到完整的 `<image_caption>` 与随消息附图的路径。
+        """
+        if not self.enabled():
+            return
+        try:
+            await apply_caption_writeback(self.storage, event, req, self.logger)
+        except Exception as exc:  # noqa: BLE001 - 回写失败不能影响正常聊天
+            self.logger.debug(f"[AstrHe] 图片描述回写跳过: {exc}")
+
     # ---------------- 夜间运行 ----------------
 
     def _internal_tools_provider(self, kind: str, **kwargs: Any) -> list:
@@ -293,6 +344,7 @@ class AstrHeRuntime:
                 lambda: window,
                 self.secrecy,
                 run_id=kwargs.get("run_id"),
+                access=self.access,
             )
             return reader.build()
         if kind == "draft":
@@ -305,6 +357,7 @@ class AstrHeRuntime:
                 tz_getter=self.tz,
                 commit_state=kwargs.get("commit_state"),
                 admins=kwargs.get("admins", self.admins()),
+                access=self.access,
             ).build()
         return []
 
@@ -327,6 +380,7 @@ class AstrHeRuntime:
             friend_request_manager=self.friend_requests,
             internal_tools_provider=self._internal_tools_provider,
             logger=self.logger,
+            session_access=self.access,
         )
         pipeline.alarm_tracker = self.alarm_tracker
         pipeline.external_tasks = self._external_tasks

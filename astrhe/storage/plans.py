@@ -52,6 +52,35 @@ class PlansRepo:
             "SELECT * FROM plans WHERE plan_date=? AND deleted_at IS NULL", (plan_date,)
         )
 
+    async def update_plan_field(self, plan_id: int, field: str, text: str) -> bool:
+        """只更新最近规划中指定的正文或白天提醒，不触碰夜间反思。"""
+        if field not in ("full_text", "day_reminders"):
+            raise ValueError("field 只能是 full_text / day_reminders")
+        cur = await self.db.execute(
+            f"UPDATE plans SET {field}=?, updated_at=? WHERE id=? AND deleted_at IS NULL",
+            (text, utc_now(), plan_id),
+        )
+        return bool(cur.rowcount)
+
+    async def update_section(self, plan_id: int, umo: str, text: str) -> None:
+        """仅更新一个会话段落，没有时插入；其他会话的段落保持原值。"""
+        cur = await self.db.execute(
+            "UPDATE plan_sections SET text=? WHERE plan_id=? AND umo=?"
+            " AND EXISTS (SELECT 1 FROM plans WHERE id=? AND deleted_at IS NULL)",
+            (text, plan_id, umo, plan_id),
+        )
+        if not cur.rowcount:
+            await self.db.execute(
+                "INSERT INTO plan_sections(plan_id, umo, text)"
+                " SELECT id, ?, ? FROM plans WHERE id=? AND deleted_at IS NULL"
+                " AND NOT EXISTS (SELECT 1 FROM plan_sections WHERE plan_id=? AND umo=?)",
+                (umo, text, plan_id, plan_id, umo),
+            )
+        await self.db.execute(
+            "UPDATE plans SET updated_at=? WHERE id=? AND deleted_at IS NULL",
+            (utc_now(), plan_id),
+        )
+
     async def get_latest_plan(self) -> dict[str, Any] | None:
         return await self.db.fetchone(
             "SELECT * FROM plans WHERE deleted_at IS NULL ORDER BY created_at DESC,id DESC LIMIT 1"
@@ -154,6 +183,34 @@ class PlansRepo:
         return await self.db.fetchone(
             "SELECT * FROM todos WHERE id=? AND deleted_at IS NULL", (todo_id,)
         )
+
+    async def update_todo_fields(self, todo_id: int, **fields: Any) -> bool:
+        """只写传入的可编辑字段，并刷新更新时间。"""
+        columns = {
+            "content": "content",
+            "visible_umos": "visible_umos_json",
+            "secret_from": "secret_from_json",
+            "due_kind": "due_kind",
+            "due_date": "due_date",
+            "show_from": "show_from",
+            "note": "note",
+        }
+        if not fields:
+            return False
+        assignments, values = [], []
+        for field, value in fields.items():
+            column = columns[field]
+            assignments.append(f"{column}=?")
+            values.append(
+                json.dumps(value, ensure_ascii=False)
+                if field in ("visible_umos", "secret_from") else value
+            )
+        cur = await self.db.execute(
+            f"UPDATE todos SET {', '.join(assignments)}, updated_at=?"
+            " WHERE id=? AND deleted_at IS NULL",
+            (*values, utc_now(), todo_id),
+        )
+        return bool(cur.rowcount)
 
     async def open_todos(self) -> list[dict[str, Any]]:
         return await self.db.fetchall(

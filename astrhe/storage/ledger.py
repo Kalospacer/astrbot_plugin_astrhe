@@ -31,14 +31,19 @@ class LedgerRepo:
         platform_message_id: str | None = None,
         is_bot: bool = False,
         source: str = "live",
+        media: str = "",
     ) -> int | None:
-        """写入一条消息；platform_message_id 冲突（非空）时忽略，返回行 id 或 None。"""
+        """写入一条消息；platform_message_id 冲突（非空）时忽略，返回行 id 或 None。
+
+        media 存该条消息附带的图片引用（JSON 数组，只记 url/file 字符串），
+        供后续按图片回溯补齐描述用，不参与展示。
+        """
         cur = await self.db.execute(
             """
             INSERT OR IGNORE INTO messages(
                 umo, platform_id, message_type, session_id, platform_message_id,
-                sender_id, sender_name, sender_card, text, ts, is_bot, source
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                sender_id, sender_name, sender_card, text, ts, is_bot, source, media
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 umo,
@@ -53,11 +58,19 @@ class LedgerRepo:
                 ts,
                 1 if is_bot else 0,
                 source,
+                media or "",
             ),
         )
         if cur.lastrowid and cur.rowcount:
             return int(cur.lastrowid)
         return None
+
+    async def update_message_text(self, row_id: int, text: str) -> None:
+        """按行 id 覆盖某条消息的 text（用于图片描述延迟回写）。"""
+        await self.db.execute(
+            "UPDATE messages SET text=? WHERE id=?",
+            (text, int(row_id)),
+        )
 
     async def find_bot_temp_messages(
         self, umo: str, since_ts: float
