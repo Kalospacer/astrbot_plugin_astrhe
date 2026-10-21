@@ -48,6 +48,27 @@ _IMAGE_CAPTION_RE = re.compile(r"^<image_caption>([\s\S]*)</image_caption>$")
 #: 只匹配「还没写过描述」的占位符：紧跟冒号或已经带上描述的都不再动，避免套娃
 _BARE_PLACEHOLDER_RE = re.compile(r"\[图片\](?!\s*[:：])")
 
+#: 描述里出现这些字样说明模型压根没看到图，整段丢掉不回写
+INVALID_CAPTION_MARKERS = (
+    "未检测到图片",
+    "未识别到图片",
+    "没有上传",
+    "未上传",
+    "未接收到图片",
+    "没有收到图片",
+    "无法直接看到",
+    "无法查看",
+    "没有附带任何图片",
+    "无图像数据",
+    "未包含图像",
+    "没有提供任何图片",
+    "no image",
+    "cannot see the image",
+    "can't see the image",
+    "unable to view",
+    "not able to see",
+)
+
 
 def _part_text(part: Any) -> str:
     """取出 extra_user_content_parts 里单个 part 的文本（兼容 str 与 TextPart）。"""
@@ -76,16 +97,33 @@ def extract_caption(req: Any) -> str:
 
 
 def clean_caption(caption: str) -> str:
-    """把描述里的换行与多余空白压成单空格，并去掉首尾空白。"""
-    return re.sub(r"\s+", " ", str(caption or "")).strip()
+    """压掉换行与多余空白，并把方括号换成全角。
+
+    描述里自带 `[` `]` 会把账本里的 `[图片: 描述]` 撑坏，下游按方括号解析就截断错位，
+    所以入库前统一换成全角，展示时仍是原样的话。
+    """
+    text = str(caption or "").replace("[", "［").replace("]", "］")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def is_valid_caption(caption: str) -> bool:
+    """判断描述是不是真的描述图，而不是「没收到图片」这类失败话术。
+
+    识图模型有时候拿到的是空的图片数据，也会照着自己的模板回一段「未检测到图片」
+    「没上传图片」之类的说明。这种话写进账本比不写更糟，下游会把它当成图里的内容。
+    """
+    clean = clean_caption(caption)
+    if not clean:
+        return False
+    lowered = clean.lower()
+    return not any(bad in clean or bad in lowered for bad in INVALID_CAPTION_MARKERS)
 
 
 def render_described(caption: str) -> str | None:
-    """把描述包成账本里的标准形态 `[图片: 描述]`；描述为空时返回 None。"""
-    clean = clean_caption(caption)
-    if not clean:
+    """把描述包成账本里的标准形态 `[图片: 描述]`；描述无效时返回 None。"""
+    if not is_valid_caption(caption):
         return None
-    return IMAGE_DESCRIBED_TEMPLATE.format(caption=clean)
+    return IMAGE_DESCRIBED_TEMPLATE.format(caption=clean_caption(caption))
 
 
 def replace_first_placeholder(text: str, caption: str) -> str | None:
